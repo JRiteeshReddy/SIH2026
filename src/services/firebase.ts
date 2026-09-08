@@ -4,7 +4,8 @@ import {
   signInWithPopup, 
   GoogleAuthProvider, 
   signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   signOut, 
   onAuthStateChanged,
   User as FirebaseUser,
@@ -23,148 +24,125 @@ import {
   limit,
   Firestore
 } from 'firebase/firestore';
-import { UserProfile, Expedition, DiscoveryRecord, LeaderboardUser } from '../types';
+import { UserProfile, Expedition, DiscoveryRecord, LeaderboardUser, ConservationReport } from '../types';
 
-export interface FirebaseConfigParams {
-  apiKey: string;
-  authDomain: string;
-  projectId: string;
-  storageBucket: string;
-  messagingSenderId: string;
-  appId: string;
+// Read Firebase Web SDK Configuration strictly from Vite Environment Variables
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || ''
+};
+
+// Singleton initialization for Firebase App, Auth, and Firestore
+let app: FirebaseApp;
+let auth: Auth;
+let db: Firestore;
+
+if (!getApps().length) {
+  app = initializeApp(firebaseConfig);
+} else {
+  app = getApps()[0];
 }
 
-// Local storage key for custom Firebase settings
-const FB_CONFIG_STORAGE_KEY = 'ecodex_firebase_config';
+auth = getAuth(app);
+db = getFirestore(app);
 
-export const getSavedFirebaseConfig = (): FirebaseConfigParams | null => {
-  try {
-    const raw = localStorage.getItem(FB_CONFIG_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    // ignore
-  }
-  return null;
-};
+export { app, auth, db };
 
-export const saveFirebaseConfig = (cfg: FirebaseConfigParams) => {
-  localStorage.setItem(FB_CONFIG_STORAGE_KEY, JSON.stringify(cfg));
-};
+// ==================================================
+// AUTHENTICATION SERVICES
+// ==================================================
 
-let app: FirebaseApp | null = null;
-let auth: Auth | null = null;
-let db: Firestore | null = null;
+/**
+ * Format raw Firebase Auth errors into clean, human-readable UI messages.
+ */
+export const formatAuthError = (err: unknown): string => {
+  if (!err) return 'An unexpected error occurred. Please try again.';
+  const code = (err as { code?: string })?.code || '';
+  const message = (err as { message?: string })?.message || '';
 
-export const initFirebase = (customConfig?: FirebaseConfigParams) => {
-  const config = customConfig || getSavedFirebaseConfig();
-  if (!config || !config.apiKey || config.apiKey === 'DEMO_MODE') {
-    return { app: null, auth: null, db: null, isDemo: true };
-  }
-
-  try {
-    if (!getApps().length) {
-      app = initializeApp(config);
-    } else {
-      app = getApps()[0];
-    }
-    auth = getAuth(app);
-    db = getFirestore(app);
-    return { app, auth, db, isDemo: false };
-  } catch (err) {
-    console.warn('Firebase initialization error, continuing in local mode:', err);
-    return { app: null, auth: null, db: null, isDemo: true };
-  }
-};
-
-// Auto-init on load
-initFirebase();
-
-// Auth helpers
-export const loginWithGoogle = async (): Promise<{ user: Partial<FirebaseUser> | null; isNew: boolean }> => {
-  if (auth) {
-    const provider = new GoogleAuthProvider();
-    const cred = await signInWithPopup(auth, provider);
-    const userDocRef = doc(db!, 'users', cred.user.uid);
-    const snapshot = await getDoc(userDocRef);
-    return { user: cred.user, isNew: !snapshot.exists() };
-  } else {
-    // Offline / Demo Fallback
-    const demoUser = {
-      uid: 'demo_user_' + Date.now().toString().slice(-4),
-      displayName: 'Nature Explorer',
-      email: 'explorer@ecodex.org'
-    };
-    return { user: demoUser as unknown as FirebaseUser, isNew: true };
+  switch (code) {
+    case 'auth/user-not-found':
+    case 'auth/wrong-password':
+    case 'auth/invalid-credential':
+      return 'Invalid email or password. Please check your credentials.';
+    case 'auth/email-already-in-use':
+      return 'This email address is already registered. Please sign in instead.';
+    case 'auth/weak-password':
+      return 'Password should be at least 6 characters long.';
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address.';
+    case 'auth/popup-closed-by-user':
+      return 'Google sign-in popup was closed before completing.';
+    case 'auth/popup-blocked':
+      return 'Sign-in popup was blocked by your browser settings.';
+    case 'auth/network-request-failed':
+      return 'Network connection unavailable. Please check your connection.';
+    case 'auth/too-many-requests':
+      return 'Too many unsuccessful attempts. Please try again later.';
+    default:
+      if (message.includes('popup')) return 'Google sign-in popup closed or blocked.';
+      return message || 'Authentication failed. Please try again.';
   }
 };
 
-export const loginWithEmail = async (email: string, pass: string): Promise<FirebaseUser | { uid: string; email: string }> => {
-  if (auth) {
-    const cred = await signInWithEmailAndPassword(auth, email, pass);
-    return cred.user;
-  } else {
-    return {
-      uid: 'email_user_' + Math.abs(email.split('').reduce((a, b) => (a << 5) - a + b.charCodeAt(0), 0)),
-      email
-    };
-  }
+/**
+ * Authenticate with Google OAuth popup.
+ * Returns authenticated FirebaseUser.
+ */
+export const loginWithGoogle = async (): Promise<FirebaseUser> => {
+  const provider = new GoogleAuthProvider();
+  const cred = await signInWithPopup(auth, provider);
+  return cred.user;
 };
 
-export const registerWithEmail = async (email: string, pass: string): Promise<FirebaseUser | { uid: string; email: string }> => {
-  if (auth) {
-    const cred = await createUserWithEmailAndPassword(auth, email, pass);
-    return cred.user;
-  } else {
-    return {
-      uid: 'email_user_' + Date.now(),
-      email
-    };
-  }
+/**
+ * Sign in with Email and Password.
+ * Returns authenticated FirebaseUser.
+ */
+export const loginWithEmail = async (email: string, pass: string): Promise<FirebaseUser> => {
+  const cred = await signInWithEmailAndPassword(auth, email, pass);
+  return cred.user;
 };
 
-export const logoutUser = async () => {
-  if (auth) {
-    await signOut(auth);
-  }
+/**
+ * Register new user with Email and Password.
+ * Returns created FirebaseUser with UID.
+ */
+export const registerWithEmail = async (email: string, pass: string): Promise<FirebaseUser> => {
+  const cred = await createUserWithEmailAndPassword(auth, email, pass);
+  return cred.user;
 };
 
-// Firestore User Profile helpers
-export const saveUserProfileToFirestore = async (profile: UserProfile): Promise<void> => {
-  if (db) {
-    try {
-      await setDoc(doc(db, 'users', profile.uid), profile, { merge: true });
-    } catch (e) {
-      console.warn('Firestore user save failed:', e);
-    }
-  }
-  // Always update local cache
-  localStorage.setItem(`ecodex_user_${profile.uid}`, JSON.stringify(profile));
-  localStorage.setItem('ecodex_active_uid', profile.uid);
+/**
+ * Send Password Reset Email.
+ */
+export const resetPasswordWithEmail = async (email: string): Promise<void> => {
+  await sendPasswordResetEmail(auth, email);
 };
 
-export const getUserProfileFromFirestore = async (uid: string): Promise<UserProfile | null> => {
-  if (db) {
-    try {
-      const snap = await getDoc(doc(db, 'users', uid));
-      if (snap.exists()) {
-        return snap.data() as UserProfile;
-      }
-    } catch (e) {
-      console.warn('Firestore user fetch failed:', e);
-    }
-  }
-  const cached = localStorage.getItem(`ecodex_user_${uid}`);
-  if (cached) {
-    try {
-      return JSON.parse(cached);
-    } catch {
-      // ignore
-    }
-  }
-  return null;
+/**
+ * Sign out current authenticated user.
+ */
+export const logoutUser = async (): Promise<void> => {
+  await signOut(auth);
 };
 
-// Pending Offline Sync Keys
+/**
+ * Listen to Firebase Auth state updates across sessions/refreshes.
+ */
+export const subscribeToAuthState = (callback: (user: FirebaseUser | null) => void) => {
+  return onAuthStateChanged(auth, callback);
+};
+
+// ==================================================
+// FIRESTORE USER PROFILES & OFFLINE QUEUE KEYS
+// ==================================================
+
 const PENDING_EXPEDITIONS_KEY = 'ecodex_pending_expeditions';
 const PENDING_DISCOVERIES_KEY = 'ecodex_pending_discoveries';
 const PENDING_PROFILE_KEY = 'ecodex_pending_profile';
@@ -189,26 +167,163 @@ export const getPendingSyncCount = (): number => {
   return exps.length + discs.length + (prof ? 1 : 0);
 };
 
-// Save Expedition to Firestore 'expeditions' collection with Offline Queue
-export const logExpeditionToFirestore = async (expedition: Expedition): Promise<void> => {
-  // 1. Always cache locally in device history
-  const history = getLocalExpeditions();
-  history.unshift(expedition);
-  localStorage.setItem('ecodex_expedition_history', JSON.stringify(history.slice(0, 50)));
+/**
+ * Save / Update User Profile in Firestore under users/{uid}.
+ */
+export const saveUserProfileToFirestore = async (profile: UserProfile): Promise<boolean> => {
+  const payload = {
+    ...profile,
+    updatedAt: new Date().toISOString()
+  };
 
-  // 2. If online and DB connected, push to cloud
+  // Cache locally
+  localStorage.setItem(`ecodex_user_${profile.uid}`, JSON.stringify(payload));
+  localStorage.setItem('ecodex_active_uid', profile.uid);
+
+  if (navigator.onLine && db && auth.currentUser) {
+    try {
+      await setDoc(doc(db, 'users', profile.uid), payload, { merge: true });
+      return true;
+    } catch (e) {
+      console.warn('Firestore full user profile save failed (progression fields guarded by security rules):', e);
+      // Fallback: update non-authoritative profile fields allowed by Firestore security rules
+      try {
+        const safeProfile = {
+          uid: profile.uid,
+          username: profile.username,
+          email: profile.email,
+          college: profile.college,
+          avatar: profile.avatar,
+          cityState: profile.cityState,
+          updatedAt: new Date().toISOString()
+        };
+        await setDoc(doc(db, 'users', profile.uid), safeProfile, { merge: true });
+        return true;
+      } catch (err) {
+        console.warn('Fallback profile save failed, queueing offline:', err);
+        localStorage.setItem(PENDING_PROFILE_KEY, JSON.stringify(payload));
+        return false;
+      }
+    }
+  } else {
+    localStorage.setItem(PENDING_PROFILE_KEY, JSON.stringify(payload));
+    return false;
+  }
+};
+
+export type FetchProfileResult = 
+  | { status: 'exists'; profile: UserProfile }
+  | { status: 'missing'; profile: null }
+  | { status: 'error'; error: Error };
+
+/**
+ * Fetch User Profile Result from Firestore users/{uid}.
+ * Distinguishes confirmed non-existence ('missing') from network/permission errors ('error').
+ */
+export const fetchUserProfileResult = async (uid: string): Promise<FetchProfileResult> => {
   if (navigator.onLine && db) {
     try {
-      await addDoc(collection(db, 'expeditions'), expedition);
+      const snap = await getDoc(doc(db, 'users', uid));
+      if (snap.exists()) {
+        const data = snap.data() as UserProfile;
+        localStorage.setItem(`ecodex_user_${uid}`, JSON.stringify(data));
+        return { status: 'exists', profile: data };
+      } else {
+        return { status: 'missing', profile: null };
+      }
+    } catch (e: unknown) {
+      console.warn('Firestore user fetch failed with error:', e);
+      return { status: 'error', error: e instanceof Error ? e : new Error(String(e)) };
+    }
+  }
+
+  // If offline, check local cache
+  const cached = localStorage.getItem(`ecodex_user_${uid}`);
+  if (cached) {
+    try {
+      const data = JSON.parse(cached) as UserProfile;
+      return { status: 'exists', profile: data };
+    } catch {
+      // cache corrupted
+    }
+  }
+
+  // If offline and no local cache, return network error state rather than treating as missing profile
+  return { status: 'error', error: new Error('Network connection unavailable and no local profile cached.') };
+};
+
+/**
+ * Legacy/Simple Fetch User Profile from Firestore users/{uid}.
+ */
+export const getUserProfileFromFirestore = async (uid: string): Promise<UserProfile | null> => {
+  const result = await fetchUserProfileResult(uid);
+  return result.status === 'exists' ? result.profile : null;
+};
+
+/**
+ * Fetch Firestore-backed Leaderboard Users sorted by ecoXP
+ */
+export const fetchLeaderboardFromFirestore = async (): Promise<LeaderboardUser[]> => {
+  if (navigator.onLine && db) {
+    try {
+      const q = query(collection(db, 'users'), orderBy('ecoXP', 'desc'), limit(50));
+      const snap = await getDocs(q);
+      const list: LeaderboardUser[] = [];
+      let rank = 1;
+      snap.forEach(docSnap => {
+        const data = docSnap.data();
+        list.push({
+          uid: data.uid || docSnap.id,
+          username: data.username || 'Explorer',
+          college: data.college || 'EcoDex Academy',
+          avatar: data.avatar || '🌿',
+          cityState: data.cityState || 'India',
+          rank: rank++,
+          level: data.level || 1,
+          ecoXP: data.ecoXP || 0,
+          totalDistance: data.totalDistance || 0,
+          speciesFound: data.speciesFound || 0,
+          streak: data.streak || 1,
+          achievementsCount: Array.isArray(data.achievements) ? data.achievements.length : (data.achievementsCount || 0)
+        });
+      });
+      if (list.length > 0) return list;
+    } catch (e) {
+      console.warn('Leaderboard fetch from Firestore failed, falling back to local:', e);
+    }
+  }
+  return [];
+};
+
+// ==================================================
+// EXPEDITIONS COLLECTION (expeditions/{expeditionId})
+// ==================================================
+
+export const logExpeditionToFirestore = async (expedition: Expedition): Promise<void> => {
+  const currentUid = auth.currentUser?.uid || expedition.userId;
+  const payload: Expedition = {
+    ...expedition,
+    userId: currentUid,
+    createdAt: expedition.createdAt || new Date().toISOString()
+  };
+
+  // Always cache locally in device history
+  const history = getLocalExpeditions();
+  history.unshift(payload);
+  localStorage.setItem('ecodex_expedition_history', JSON.stringify(history.slice(0, 50)));
+
+  if (navigator.onLine && db && auth.currentUser) {
+    try {
+      await setDoc(doc(db, 'expeditions', expedition.id), payload);
       return;
     } catch (e) {
       console.warn('Firestore expedition log failed, queueing for offline sync:', e);
     }
   }
 
-  // 3. Queue for sync when internet returns
+  // Queue for sync when internet returns
   const pending = getPendingItems<Expedition>(PENDING_EXPEDITIONS_KEY);
-  pending.push(expedition);
+  pending.push(payload);
   setPendingItems(PENDING_EXPEDITIONS_KEY, pending);
 };
 
@@ -221,26 +336,52 @@ export const getLocalExpeditions = (): Expedition[] => {
   }
 };
 
-// Save Discovery to Firestore 'discoveries' collection with Offline Queue
+// ==================================================
+// DISCOVERIES COLLECTION (discoveries/{discoveryId})
+// ==================================================
+
 export const logDiscoveryToFirestore = async (discovery: DiscoveryRecord): Promise<void> => {
-  // 1. Always cache locally in device history
+  const currentUid = auth.currentUser?.uid || discovery.userId;
+  const latVal = typeof discovery.latitude === 'number' ? discovery.latitude : (discovery.coordinates?.lat ?? 18.5204);
+  const lngVal = typeof discovery.longitude === 'number' ? discovery.longitude : (discovery.coordinates?.lng ?? 73.8567);
+  const confVal = typeof discovery.confidence === 'number' ? Math.min(1, Math.max(0, discovery.confidence)) : 0.95;
+
+  // Ensure mandatory persisted fields matching security rules: userId, speciesId, latitude, longitude, confidence, timestamp
+  const payload: DiscoveryRecord = {
+    id: discovery.id,
+    userId: currentUid,
+    speciesId: discovery.speciesId,
+    animalName: discovery.animalName || discovery.speciesName || 'Wildlife Sighting',
+    rarity: discovery.rarity || 'Common',
+    confidence: confVal,
+    latitude: latVal,
+    longitude: lngVal,
+    timestamp: discovery.timestamp || new Date().toISOString(),
+    ecoXP: discovery.ecoXP ?? discovery.xpAwarded ?? 20,
+    expeditionId: discovery.expeditionId || null,
+    createdAt: discovery.createdAt || new Date().toISOString(),
+    localImageUri: discovery.localImageUri || discovery.photoUrl,
+    locationName: discovery.locationName || 'Nature Sanctuary'
+  };
+
+  // Always cache locally in device history
   const history = getLocalDiscoveries();
-  history.unshift(discovery);
+  history.unshift(payload);
   localStorage.setItem('ecodex_discovery_history', JSON.stringify(history.slice(0, 50)));
 
-  // 2. If online and DB connected, push to cloud
-  if (navigator.onLine && db) {
+  // Do NOT upload base64 or images to Firebase Storage (staying on Spark plan)
+  if (navigator.onLine && db && auth.currentUser) {
     try {
-      await addDoc(collection(db, 'discoveries'), discovery);
+      await setDoc(doc(db, 'discoveries', discovery.id), payload);
       return;
     } catch (e) {
       console.warn('Firestore discovery log failed, queueing for offline sync:', e);
     }
   }
 
-  // 3. Queue for sync when internet returns
+  // Queue for offline sync
   const pending = getPendingItems<DiscoveryRecord>(PENDING_DISCOVERIES_KEY);
-  pending.push(discovery);
+  pending.push(payload);
   setPendingItems(PENDING_DISCOVERIES_KEY, pending);
 };
 
@@ -253,14 +394,47 @@ export const getLocalDiscoveries = (): DiscoveryRecord[] => {
   }
 };
 
-// Sync with Firebase when internet returns
+// ==================================================
+// REPORTS COLLECTION (reports/{reportId})
+// ==================================================
+
+export const submitReportToFirestore = async (report: ConservationReport): Promise<boolean> => {
+  const currentUserId = auth.currentUser?.uid || report.reporterUserId;
+  const payload: ConservationReport = {
+    ...report,
+    reporterUserId: currentUserId,
+    createdAt: report.createdAt || new Date().toISOString(),
+    status: report.status || 'pending'
+  };
+
+  if (navigator.onLine && db && auth.currentUser) {
+    try {
+      await setDoc(doc(db, 'reports', report.id), payload);
+      return true;
+    } catch (e) {
+      console.warn('Firestore report save error:', e);
+      return false;
+    }
+  }
+  return true;
+};
+
+// ==================================================
+// OFFLINE QUEUE SYNCHRONIZATION WITH RETRY LOGIC
+// ==================================================
+
+/**
+ * Synchronize pending items with Firebase.
+ * IMPORTANT: Only remove items from the offline queue if the Firebase write ACTUALLY succeeds.
+ * If write fails, item remains in queue for future retry.
+ */
 export const syncPendingWithFirebase = async (): Promise<{
   syncedExpeditions: number;
   syncedDiscoveries: number;
   syncedProfile: boolean;
   success: boolean;
 }> => {
-  if (!navigator.onLine) {
+  if (!navigator.onLine || !db || !auth.currentUser) {
     return { syncedExpeditions: 0, syncedDiscoveries: 0, syncedProfile: false, success: false };
   }
 
@@ -272,73 +446,52 @@ export const syncPendingWithFirebase = async (): Promise<{
   let syncedDiscoveries = 0;
   let syncedProfile = false;
 
-  try {
-    // 1. Push pending expeditions
-    if (db && pendingExpeditions.length > 0) {
-      for (const exp of pendingExpeditions) {
-        await addDoc(collection(db, 'expeditions'), exp);
+  // 1. Synchronize Pending Expeditions
+  if (pendingExpeditions.length > 0) {
+    const remainingExpeditions: Expedition[] = [];
+    for (const exp of pendingExpeditions) {
+      try {
+        await setDoc(doc(db, 'expeditions', exp.id), exp);
         syncedExpeditions++;
+      } catch (err) {
+        console.warn(`Expedition sync failed for ${exp.id}:`, err);
+        remainingExpeditions.push(exp);
       }
-      setPendingItems(PENDING_EXPEDITIONS_KEY, []);
-    } else if (pendingExpeditions.length > 0) {
-      syncedExpeditions = pendingExpeditions.length;
-      setPendingItems(PENDING_EXPEDITIONS_KEY, []);
     }
+    setPendingItems(PENDING_EXPEDITIONS_KEY, remainingExpeditions);
+  }
 
-    // 2. Push pending discoveries
-    if (db && pendingDiscoveries.length > 0) {
-      for (const disc of pendingDiscoveries) {
-        await addDoc(collection(db, 'discoveries'), disc);
+  // 2. Synchronize Pending Discoveries
+  if (pendingDiscoveries.length > 0) {
+    const remainingDiscoveries: DiscoveryRecord[] = [];
+    for (const disc of pendingDiscoveries) {
+      try {
+        await setDoc(doc(db, 'discoveries', disc.id), disc);
         syncedDiscoveries++;
+      } catch (err) {
+        console.warn(`Discovery sync failed for ${disc.id}:`, err);
+        remainingDiscoveries.push(disc);
       }
-      setPendingItems(PENDING_DISCOVERIES_KEY, []);
-    } else if (pendingDiscoveries.length > 0) {
-      syncedDiscoveries = pendingDiscoveries.length;
-      setPendingItems(PENDING_DISCOVERIES_KEY, []);
     }
+    setPendingItems(PENDING_DISCOVERIES_KEY, remainingDiscoveries);
+  }
 
-    // 3. Push pending user profile
-    if (pendingProfileRaw) {
+  // 3. Synchronize Pending Profile
+  if (pendingProfileRaw) {
+    try {
       const profile = JSON.parse(pendingProfileRaw) as UserProfile;
-      if (db) {
-        await setDoc(doc(db, 'users', profile.uid), profile, { merge: true });
-      }
+      await setDoc(doc(db, 'users', profile.uid), profile, { merge: true });
       localStorage.removeItem(PENDING_PROFILE_KEY);
       syncedProfile = true;
-    }
-
-    return {
-      syncedExpeditions,
-      syncedDiscoveries,
-      syncedProfile,
-      success: true
-    };
-  } catch (err) {
-    console.warn('Sync with Firebase partial error:', err);
-    return {
-      syncedExpeditions,
-      syncedDiscoveries,
-      syncedProfile,
-      success: false
-    };
-  }
-};
-
-// Firestore 'reports' collection (e.g. reporting rare sightings / conservation flags)
-export const submitReportToFirestore = async (report: {
-  userId: string;
-  speciesName: string;
-  location: string;
-  notes: string;
-  timestamp: string;
-}) => {
-  if (db && navigator.onLine) {
-    try {
-      await addDoc(collection(db, 'reports'), report);
-      return true;
-    } catch (e) {
-      console.warn('Firestore report save error:', e);
+    } catch (err) {
+      console.warn('Profile sync failed:', err);
     }
   }
-  return true;
+
+  return {
+    syncedExpeditions,
+    syncedDiscoveries,
+    syncedProfile,
+    success: true
+  };
 };

@@ -167,7 +167,12 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
       ? INITIAL_SPECIES.find(s => s.name.toLowerCase().includes(confirmedLabel.toLowerCase())) || prediction.species
       : prediction.species;
 
-    recordDiscovery(targetSpecies.id, capturedImage || targetSpecies.image, prediction.confidence);
+    recordDiscovery(
+      targetSpecies.id, 
+      capturedImage || targetSpecies.image, 
+      prediction.confidence,
+      antiCheat?.coordinates
+    );
     onClose();
   };
 

@@ -12,6 +12,7 @@ import {
   ShieldCheck, 
   School, 
   MapPin, 
+  Mail, 
   Calendar, 
   Database, 
   ExternalLink, 
@@ -33,7 +34,7 @@ import {
 } from 'lucide-react';
 import { useEcoDex } from '../context/EcoDexContext';
 import { audio } from '../services/audioService';
-import { saveFirebaseConfig, getSavedFirebaseConfig, getLocalExpeditions } from '../services/firebase';
+import { getLocalExpeditions } from '../services/firebase';
 import { calculateExplorerLevel } from '../services/gamificationService';
 import { ExpeditionHistoryCard } from './ExpeditionHistoryCard';
 import { Expedition } from '../types';
@@ -141,11 +142,6 @@ export const ProfileTab: React.FC = () => {
 
   // Badge category filtering
   const [selectedBadgeCategory, setSelectedBadgeCategory] = useState<string>('All');
-  const [showFirebaseModal, setShowFirebaseModal] = useState(false);
-  const [apiKey, setApiKey] = useState(() => getSavedFirebaseConfig()?.apiKey || '');
-  const [authDomain, setAuthDomain] = useState(() => getSavedFirebaseConfig()?.authDomain || '');
-  const [projectId, setProjectId] = useState(() => getSavedFirebaseConfig()?.projectId || '');
-  const [savedSuccess, setSavedSuccess] = useState(false);
 
   // Sync theme to document body
   useEffect(() => {
@@ -193,23 +189,6 @@ export const ProfileTab: React.FC = () => {
     }
   };
 
-  const handleSaveFirebaseConfig = (e: React.FormEvent) => {
-    e.preventDefault();
-    saveFirebaseConfig({
-      apiKey,
-      authDomain,
-      projectId,
-      storageBucket: `${projectId}.appspot.com`,
-      messagingSenderId: '1234567890',
-      appId: '1:1234567890:web:abcdef'
-    });
-    setSavedSuccess(true);
-    setTimeout(() => {
-      setSavedSuccess(false);
-      setShowFirebaseModal(false);
-    }, 1200);
-  };
-
   return (
     <div className="space-y-4 pb-28 pt-1">
       {/* Top Header */}
@@ -225,13 +204,6 @@ export const ProfileTab: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowFirebaseModal(true)}
-            className="p-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:text-forest transition-colors cursor-pointer shadow-xs"
-            title="Firebase Settings"
-          >
-            <Database className="w-4 h-4" />
-          </button>
           <button
             onClick={() => setShowLogoutConfirm(true)}
             className="p-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:text-rose-600 transition-colors cursor-pointer shadow-xs"
@@ -269,9 +241,16 @@ export const ProfileTab: React.FC = () => {
                 </span>
               </div>
 
+              {user.email && (
+                <p className="text-[11px] text-emerald-200/90 font-mono flex items-center gap-1 mt-0.5">
+                  <Mail className="w-3 h-3 text-leaf-pale flex-shrink-0" />
+                  <span>{user.email}</span>
+                </p>
+              )}
+
               <p className="text-xs text-emerald-100 font-medium flex items-center gap-1 mt-0.5">
                 <School className="w-3.5 h-3.5 text-leaf-pale flex-shrink-0" />
-                <span>{user.college || 'EcoDex Institute of Ecology'}</span>
+                <span>{user.college || 'EcoDex Academy'}</span>
               </p>
 
               <p className="text-[11px] text-emerald-200/90 flex items-center gap-1 mt-0.5">
@@ -661,78 +640,6 @@ export const ProfileTab: React.FC = () => {
         </div>
       )}
 
-      {/* Firebase Configuration Modal */}
-      {showFirebaseModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
-          <div className="relative w-full max-w-md bg-white rounded-card-lg p-6 shadow-2xl border border-leaf-pale">
-            <h3 className="text-lg font-bold text-slate-900 mb-1 flex items-center gap-2">
-              <Database className="w-5 h-5 text-forest" />
-              Firebase Firestore Configuration
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Connect your live Firebase Authentication and Firestore database for collections: <code className="text-forest">users, expeditions, discoveries, leaderboard, achievements, reports</code>.
-            </p>
-
-            {savedSuccess ? (
-              <div className="p-4 bg-emerald-50 text-emerald-800 rounded-xl flex items-center gap-2 text-xs font-bold mb-3">
-                <Check className="w-4 h-4 text-emerald-600" />
-                Firebase Credentials Saved! Cloud sync active.
-              </div>
-            ) : (
-              <form onSubmit={handleSaveFirebaseConfig} className="space-y-3 text-xs">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Firebase API Key</label>
-                  <input
-                    type="text"
-                    placeholder="AIzaSy..."
-                    value={apiKey}
-                    onChange={e => setApiKey(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Auth Domain</label>
-                  <input
-                    type="text"
-                    placeholder="ecodex-project.firebaseapp.com"
-                    value={authDomain}
-                    onChange={e => setAuthDomain(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Project ID</label>
-                  <input
-                    type="text"
-                    placeholder="ecodex-nature"
-                    value={projectId}
-                    onChange={e => setProjectId(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 font-mono"
-                  />
-                </div>
-
-                <div className="pt-2 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowFirebaseModal(false)}
-                    className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold cursor-pointer"
-                  >
-                    Close
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-1 py-2.5 rounded-xl bg-forest text-white font-bold shadow-nature cursor-pointer"
-                  >
-                    Save & Connect
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 };

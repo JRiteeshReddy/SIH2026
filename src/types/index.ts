@@ -14,10 +14,13 @@ export interface UserProfile {
   totalDistance: number; // in kilometers
   speciesFound: number;
   streak: number; // in days
+  achievements?: string[]; // Array of unlocked achievement IDs
+  achievementsCount?: number;
   distanceToday?: number;
   weeklyRank?: number;
   reputation: number;
   joinedDate: string;
+  updatedAt?: string;
 }
 
 export type EcoDexRarityTab = 'All' | 'Common' | 'Rare' | 'Epic' | 'Legendary';
@@ -76,20 +79,41 @@ export interface Expedition {
   isPaused?: boolean;
   explorerRating?: number; // 1 to 5 stars
   ratingTitle?: string;
+  createdAt?: string;
 }
 
 export interface DiscoveryRecord {
   id: string;
   userId: string;
   speciesId: string;
-  speciesName: string;
-  timestamp: string;
-  locationName: string;
-  coordinates?: { lat: number; lng: number };
-  photoUrl?: string;
+  animalName: string;
+  rarity: RarityType;
   confidence: number;
-  xpAwarded: number;
+  latitude: number;
+  longitude: number;
+  timestamp: string;
+  ecoXP: number;
+  expeditionId?: string | null;
+  createdAt: string;
+  localImageUri?: string;
+  photoUrl?: string; // Optional future cloud URL field
+  locationName?: string;
+  coordinates?: { lat: number; lng: number };
+  xpAwarded?: number;
+  speciesName?: string;
   notes?: string;
+}
+
+export interface ConservationReport {
+  id: string;
+  reporterUserId: string;
+  discoveryId?: string;
+  speciesName?: string;
+  reason: string;
+  evidence: string;
+  location?: string;
+  createdAt: string;
+  status: 'pending' | 'reviewed' | 'resolved';
 }
 
 export interface BonusItem {

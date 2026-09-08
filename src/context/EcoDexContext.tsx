@@ -18,11 +18,18 @@ import {
 import { INITIAL_CHALLENGES } from '../data/challengesData';
 import { audio } from '../services/audioService';
 import { 
+  auth,
   saveUserProfileToFirestore, 
+  getUserProfileFromFirestore,
+  fetchUserProfileResult,
+  fetchLeaderboardFromFirestore,
   logExpeditionToFirestore, 
   logDiscoveryToFirestore,
+  getLocalDiscoveries,
   getPendingSyncCount,
-  syncPendingWithFirebase
+  syncPendingWithFirebase,
+  subscribeToAuthState,
+  logoutUser
 } from '../services/firebase';
 import { 
   calculateExplorerLevel, 
@@ -31,8 +38,18 @@ import {
   evaluateAllBadges 
 } from '../services/gamificationService';
 
+export type AuthStatus = 
+  | 'AUTH_LOADING' 
+  | 'UNAUTHENTICATED' 
+  | 'AUTHENTICATED_PROFILE_MISSING' 
+  | 'AUTHENTICATED_PROFILE_EXISTS';
+
 interface EcoDexContextType {
   user: UserProfile | null;
+  setUser: React.Dispatch<React.SetStateAction<UserProfile | null>>;
+  authStatus: AuthStatus;
+  authError: string | null;
+  retryAuthCheck: () => Promise<void>;
   species: Species[];
   achievements: Achievement[];
   leaderboard: LeaderboardUser[];
@@ -55,7 +72,7 @@ interface EcoDexContextType {
   setActiveExpeditionSummary: (summary: Expedition | null) => void;
   saveExpeditionAndApplyStats: (summary: Expedition) => void;
   // Discovery & AI Scanner
-  recordDiscovery: (speciesId: string, photoUrl?: string, confidence?: number) => { isNew: boolean; xpAwarded: number; breakdown: EcoXPBreakdown };
+  recordDiscovery: (speciesId: string, photoUrl?: string, confidence?: number, coords?: { lat: number; lng: number }) => { isNew: boolean; xpAwarded: number; breakdown: EcoXPBreakdown };
   activeDiscoveryModal: { species: Species; xpAwarded: number; isNew: boolean; breakdown?: EcoXPBreakdown } | null;
   closeDiscoveryModal: () => void;
   // Glassmorphic Animated Achievement Popups & Queue
@@ -65,10 +82,9 @@ interface EcoDexContextType {
   // Level Up Celebration Popup
   activeLevelUpPopup: ExplorerLevelInfo | null;
   closeLevelUpPopup: () => void;
-  // User Management
-  completeOnboarding: (data: { username: string; college: string; avatar: string; cityState: string }) => void;
-  loginDemoUser: () => void;
-  logout: () => void;
+  // User Management & Auth
+  completeOnboarding: (data: { username: string; college: string; avatar: string; cityState: string }) => Promise<void>;
+  logout: () => Promise<void>;
   // Settings & Sound
   soundEnabled: boolean;
   setSoundEnabled: (enabled: boolean) => void;
@@ -84,28 +100,10 @@ interface EcoDexContextType {
 
 const EcoDexContext = createContext<EcoDexContextType | undefined>(undefined);
 
-const DEFAULT_USER: UserProfile = {
-  uid: 'ecodex_ranger_01',
-  username: 'NatureExplorer',
-  college: 'EcoDex Institute of Ecology',
-  avatar: '🌿',
-  cityState: 'Pune, MH',
-  level: 4,
-  ecoXP: 1350,
-  totalDistance: 8.6,
-  distanceToday: 2.4,
-  weeklyRank: 4,
-  speciesFound: 6,
-  streak: 5,
-  reputation: 98,
-  joinedDate: '2026-03-01'
-};
-
 export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<UserProfile | null>(() => {
-    const saved = localStorage.getItem('ecodex_current_user');
-    return saved ? JSON.parse(saved) : DEFAULT_USER;
-  });
+  const [user, setUser] = useState<UserProfile | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>('AUTH_LOADING');
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const [species, setSpecies] = useState<Species[]>(() => {
     const saved = localStorage.getItem('ecodex_species_catalog');
@@ -133,24 +131,7 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const [achievements, setAchievements] = useState<Achievement[]>(() => {
     const saved = localStorage.getItem('ecodex_achievements_v2');
-    if (!saved) return INITIAL_ALL_BADGES;
-    try {
-      const parsed = JSON.parse(saved) as Achievement[];
-      return INITIAL_ALL_BADGES.map(initial => {
-        const found = parsed.find(p => p.id === initial.id);
-        if (found) {
-          return {
-            ...initial,
-            unlocked: found.unlocked ?? initial.unlocked,
-            progress: found.progress ?? initial.progress,
-            unlockedAt: found.unlockedAt ?? initial.unlockedAt
-          };
-        }
-        return initial;
-      });
-    } catch {
-      return INITIAL_ALL_BADGES;
-    }
+    return saved ? JSON.parse(saved) : INITIAL_ALL_BADGES;
   });
 
   const [dailyChallenges, setDailyChallenges] = useState<DailyChallenge[]>(() => {
@@ -179,7 +160,65 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [isExpeditionActive, setIsExpeditionActive] = useState<boolean>(false);
   const [currentExpedition, setCurrentExpedition] = useState<Expedition | null>(null);
 
-  // Sync to local storage
+  // Offline & Firebase Sync States
+  const [isOnline, setIsOnline] = useState<boolean>(() => {
+    return typeof navigator !== 'undefined' ? navigator.onLine : true;
+  });
+  const [pendingSyncCount, setPendingSyncCount] = useState<number>(() => getPendingSyncCount());
+  const [syncToastMessage, setSyncToastMessage] = useState<string | null>(null);
+
+  // Helper to check user profile in Firestore
+  const checkUserProfileInFirestore = async (fbUser: { uid: string; email?: string | null; displayName?: string | null }) => {
+    setAuthError(null);
+    const result = await fetchUserProfileResult(fbUser.uid);
+    if (result.status === 'exists') {
+      setUser(result.profile);
+      setAuthStatus('AUTHENTICATED_PROFILE_EXISTS');
+    } else if (result.status === 'missing') {
+      setUser(null);
+      setAuthStatus('AUTHENTICATED_PROFILE_MISSING');
+    } else {
+      console.warn('Firestore profile check error:', result.error);
+      setAuthError(result.error.message || 'Could not verify profile with Firestore.');
+      // Keep loading / error state so we do not erroneously force missing-profile onboarding
+      setAuthStatus('AUTH_LOADING');
+    }
+  };
+
+  const retryAuthCheck = async () => {
+    if (auth.currentUser) {
+      setAuthStatus('AUTH_LOADING');
+      await checkUserProfileInFirestore(auth.currentUser);
+    } else {
+      setAuthStatus('UNAUTHENTICATED');
+    }
+  };
+
+  // Subscribe to Firebase Authentication state changes
+  useEffect(() => {
+    const unsubscribe = subscribeToAuthState(async (fbUser) => {
+      if (fbUser) {
+        await checkUserProfileInFirestore(fbUser);
+      } else {
+        setUser(null);
+        setAuthStatus('UNAUTHENTICATED');
+        setAuthError(null);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Fetch Firestore Leaderboard whenever online or user changes
+  useEffect(() => {
+    fetchLeaderboardFromFirestore().then(list => {
+      if (list && list.length > 0) {
+        setLeaderboard(list);
+      }
+    });
+  }, [user, isOnline]);
+
+  // Sync user state to local storage & Firestore
   useEffect(() => {
     if (user) {
       localStorage.setItem('ecodex_current_user', JSON.stringify(user));
@@ -208,13 +247,6 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     audio.setSoundEnabled(enabled);
     setSoundEnabledState(enabled);
   };
-
-  // Offline & Firebase Sync States
-  const [isOnline, setIsOnline] = useState<boolean>(() => {
-    return typeof navigator !== 'undefined' ? navigator.onLine : true;
-  });
-  const [pendingSyncCount, setPendingSyncCount] = useState<number>(() => getPendingSyncCount());
-  const [syncToastMessage, setSyncToastMessage] = useState<string | null>(null);
 
   // Monitor network status & auto-sync when internet returns
   useEffect(() => {
@@ -327,14 +359,22 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  // Complete User Onboarding
-  const completeOnboarding = (data: { username: string; college: string; avatar: string; cityState: string }) => {
+  // Complete User Onboarding with Firebase Auth UID
+  const completeOnboarding = async (data: { username: string; college: string; avatar: string; cityState: string }) => {
+    if (!auth.currentUser) {
+      throw new Error('No authenticated user found. Please sign in first.');
+    }
+
+    const uid = auth.currentUser.uid;
+    const email = auth.currentUser.email || '';
+
     const newUser: UserProfile = {
-      uid: 'user_' + Date.now(),
+      uid, // Strictly Firebase Auth UID
       username: data.username.trim() || 'Forest Scout',
-      college: data.college.trim() || 'Ecology University',
+      email,
+      college: data.college.trim() || 'EcoDex Academy',
       avatar: data.avatar || '🌿',
-      cityState: data.cityState.trim() || 'Bangalore, KA',
+      cityState: data.cityState.trim() || 'Pune, MH',
       level: 1,
       ecoXP: 100,
       totalDistance: 0.0,
@@ -346,16 +386,15 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       joinedDate: new Date().toISOString().split('T')[0]
     };
     setUser(newUser);
+    setAuthStatus('AUTHENTICATED_PROFILE_EXISTS');
+    await saveUserProfileToFirestore(newUser);
     audio.playXpGain();
   };
 
-  const loginDemoUser = () => {
-    setUser(DEFAULT_USER);
-    audio.playChime();
-  };
-
-  const logout = () => {
+  const logout = async () => {
+    await logoutUser();
     setUser(null);
+    setAuthStatus('UNAUTHENTICATED');
     localStorage.removeItem('ecodex_current_user');
   };
 
@@ -373,7 +412,8 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       speciesEncountered: [],
       ecoXPEarned: 0,
       path: [[18.5204, 73.8567]],
-      active: true
+      active: true,
+      createdAt: new Date().toISOString()
     };
     setCurrentExpedition(newExpedition);
     setIsExpeditionActive(true);
@@ -421,7 +461,8 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       ecoXPEarned: earnedXP,
       active: false,
       explorerRating: 5,
-      ratingTitle: currentExpedition.distanceKm >= 2.0 ? 'Elite Trailblazer' : 'Seasoned Explorer'
+      ratingTitle: currentExpedition.distanceKm >= 2.0 ? 'Elite Trailblazer' : 'Seasoned Explorer',
+      createdAt: new Date().toISOString()
     };
 
     setIsExpeditionActive(false);
@@ -442,13 +483,15 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const oldLevel = calculateExplorerLevel(user.ecoXP);
     const newLevel = calculateExplorerLevel(updatedXP);
 
-    setUser(prev => prev ? {
-      ...prev,
+    const updatedUser: UserProfile = {
+      ...user,
       distanceToday: updatedDistToday,
       totalDistance: updatedDistTotal,
       ecoXP: updatedXP,
       level: newLevel.level
-    } : null);
+    };
+
+    setUser(updatedUser);
 
     // Update Daily Challenges (e.g. Walk 2 km quest)
     setDailyChallenges(prev => prev.map(ch => {
@@ -466,6 +509,7 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // Log to Firestore & Local Storage
     logExpeditionToFirestore(summary);
+    saveUserProfileToFirestore(updatedUser);
     setActiveExpeditionSummary(null);
     setCurrentExpedition(null);
     audio.playDiscovery();
@@ -518,9 +562,14 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setCurrentExpedition(null);
   };
 
-  // Record Species Discovery with Full Gamification Engine
-  const recordDiscovery = (speciesId: string, photoUrl?: string, confidence: number = 0.96) => {
-    const target = species.find(s => s.id === speciesId);
+  // Record Species Discovery with Full Gamification Engine & Persisted GPS
+  const recordDiscovery = (
+    speciesId: string, 
+    photoUrl?: string, 
+    confidence: number = 0.96,
+    coords?: { lat: number; lng: number }
+  ) => {
+    const target = species.find(s => s.id === speciesId || s.name.toLowerCase() === speciesId.toLowerCase());
     if (!target || !user) {
       return { 
         isNew: false, 
@@ -529,36 +578,46 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       };
     }
 
-    const isNew = !target.discovered;
+    const localHistory = getLocalDiscoveries();
+    const threeMinAgo = Date.now() - 3 * 60 * 1000;
+    const isRapidDuplicate = localHistory.some((d: DiscoveryRecord) => 
+      d.userId === user.uid && 
+      d.speciesId === target.id && 
+      new Date(d.timestamp).getTime() > threeMinAgo
+    );
 
-    // Check first discovery of day
+    const isExpeditionDuplicate = isExpeditionActive && currentExpedition?.speciesEncountered?.some((s: string | Species) => 
+      typeof s === 'string' ? s === target.id || s.toLowerCase() === target.name.toLowerCase() : s.id === target.id
+    );
+    const isNew = !target.discovered && !isRapidDuplicate && !isExpeditionDuplicate;
+
     const today = new Date().toISOString().split('T')[0];
     const lastDiscDate = localStorage.getItem('ecodex_last_discovery_date');
     const isFirstDiscoveryOfDay = lastDiscDate !== today;
-    localStorage.setItem('ecodex_last_discovery_date', today);
+    if (isNew) {
+      localStorage.setItem('ecodex_last_discovery_date', today);
+    }
 
-    // Check new location
     const locationName = target.discoveryLocation || user.cityState || 'Field Nature Reserve';
     const visitedLocations = JSON.parse(localStorage.getItem('ecodex_visited_locations') || '[]') as string[];
     const isNewLocation = !visitedLocations.includes(locationName);
-    if (isNewLocation) {
+    if (isNewLocation && isNew) {
       localStorage.setItem('ecodex_visited_locations', JSON.stringify([...visitedLocations, locationName]));
     }
 
-    // Calculate EcoXP Breakdown via Gamification Engine
     const breakdown = calculateEcoXPAward({
       species: target,
       isNew,
       confidence,
       userStreak: user.streak || 1,
-      isFirstDiscoveryOfDay,
-      isNewLocation
+      isFirstDiscoveryOfDay: isFirstDiscoveryOfDay && isNew,
+      isNewLocation: isNewLocation && isNew
     });
 
-    const xpAwarded = breakdown.totalXP;
+    const xpAwarded = (isRapidDuplicate || isExpeditionDuplicate) ? 0 : breakdown.totalXP;
 
     const updatedSpecies = species.map(s => {
-      if (s.id === speciesId) {
+      if (s.id === target.id) {
         const todayStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
         return {
           ...s,
@@ -573,20 +632,21 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
     setSpecies(updatedSpecies);
 
-    // Update User Stats
     const newSpeciesCount = isNew ? user.speciesFound + 1 : user.speciesFound;
     const newXP = user.ecoXP + xpAwarded;
     const oldLevel = calculateExplorerLevel(user.ecoXP);
     const newLevel = calculateExplorerLevel(newXP);
 
-    setUser(prev => prev ? {
-      ...prev,
+    const updatedUser: UserProfile = {
+      ...user,
       speciesFound: newSpeciesCount,
       ecoXP: newXP,
       level: newLevel.level
-    } : null);
+    };
 
-    // Update quest: Discover a new species
+    setUser(updatedUser);
+    saveUserProfileToFirestore(updatedUser);
+
     if (isNew) {
       setDailyChallenges(prev => prev.map(ch => {
         if (ch.id === 'quest_discover_species') {
@@ -599,21 +659,32 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }));
     }
 
-    // Log to Firestore
+    const latVal = coords?.lat ?? target.discoveryCoordinates?.lat ?? 18.5204;
+    const lngVal = coords?.lng ?? target.discoveryCoordinates?.lng ?? 73.8567;
+    const timestampMs = Date.now();
+    const minuteBucket = Math.floor(timestampMs / (60 * 1000));
+    const deterministicId = `disc_${user.uid}_${target.id}_${minuteBucket}`;
+
     const record: DiscoveryRecord = {
-      id: 'disc_' + Date.now(),
+      id: deterministicId,
       userId: user.uid,
       speciesId: target.id,
-      speciesName: target.name,
-      timestamp: new Date().toISOString(),
-      locationName,
-      photoUrl: photoUrl || target.image,
+      animalName: target.name,
+      rarity: target.rarity,
       confidence,
+      latitude: latVal,
+      longitude: lngVal,
+      timestamp: new Date(timestampMs).toISOString(),
+      ecoXP: xpAwarded,
+      expeditionId: currentExpedition?.id || null,
+      createdAt: new Date(timestampMs).toISOString(),
+      localImageUri: photoUrl || target.image,
+      locationName,
+      coordinates: { lat: latVal, lng: lngVal },
       xpAwarded
     };
     logDiscoveryToFirestore(record);
 
-    // Play discovery sound and show celebratory popup with itemized breakdown
     audio.playDiscovery();
     setActiveDiscoveryModal({
       species: target,
@@ -629,7 +700,6 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       colors: ['#2E7D32', '#66BB6A', '#FFD54F', '#4CAF50']
     });
 
-    // Evaluate all Badges after species discovery
     const hour = new Date().getHours();
     const dayOfWeek = new Date().getDay();
     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
@@ -641,31 +711,27 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const { updatedBadges, newlyUnlocked } = evaluateAllBadges(achievements, {
       discoveredSpeciesCount: newSpeciesCount,
+      totalDistanceKm: user.totalDistance,
       avianCount,
       mammalCount,
-      totalDistanceKm: user.totalDistance,
-      currentStreak: user.streak,
-      totalEcoXP: newXP,
-      currentLevel: newLevel.level,
-      isWeekend,
       isNightTime,
-      hasApexDiscovered: hasApex
+      isWeekend,
+      hasApexDiscovered: hasApex,
+      currentStreak: user.streak || 1,
+      totalEcoXP: newXP,
+      currentLevel: newLevel.level
     });
 
     if (newlyUnlocked.length > 0) {
       setAchievements(updatedBadges);
-      // Wait for DiscoveryModal to be appreciated, then queue badge modal
-      setTimeout(() => {
-        queueBadgesForPopup(newlyUnlocked);
-      }, 1400);
+      queueBadgesForPopup(newlyUnlocked);
     }
 
-    // Check Level Up Promotion
     if (newLevel.level > oldLevel.level) {
       setTimeout(() => {
         audio.playDiscovery();
         setActiveLevelUpPopup(newLevel.currentInfo);
-      }, 2000);
+      }, 1200);
     }
 
     return { isNew, xpAwarded, breakdown };
@@ -679,13 +745,17 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     <EcoDexContext.Provider
       value={{
         user,
+        setUser,
+        authStatus,
+        authError,
+        retryAuthCheck,
         species,
         achievements,
         dailyChallenges,
         claimChallenge,
         leaderboard,
         activeTab,
-        setActiveTab,
+        setActiveTab: setActiveTabState,
         isExpeditionActive,
         currentExpedition,
         startExpedition,
@@ -706,7 +776,6 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         activeLevelUpPopup,
         closeLevelUpPopup,
         completeOnboarding,
-        loginDemoUser,
         logout,
         soundEnabled,
         setSoundEnabled,

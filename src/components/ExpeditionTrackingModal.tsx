@@ -185,7 +185,7 @@ export const ExpeditionTrackingModal: React.FC<ExpeditionTrackingModalProps> = (
 
     const expeditionSummary: Expedition = {
       id: 'exp_' + Date.now(),
-      userId: user?.uid || 'guest_explorer',
+      userId: user?.uid || '',
       startTime: Date.now() - seconds * 1000,
       endTime: Date.now(),
       distanceKm: finalDist,

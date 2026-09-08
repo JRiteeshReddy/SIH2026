@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { EcoDexProvider, useEcoDex } from './context/EcoDexContext';
 import { SplashScreen } from './components/SplashScreen';
-import { AuthModal } from './components/AuthModal';
+import { AuthView } from './components/AuthView';
+import { OnboardingView } from './components/OnboardingView';
 import { BottomNavigation } from './components/BottomNavigation';
 import { HomeTab } from './components/HomeTab';
 import { ExpeditionTab } from './components/ExpeditionTab';
@@ -18,6 +19,9 @@ import { ExpeditionSummaryModal } from './components/ExpeditionSummaryModal';
 const AppContent: React.FC = () => {
   const { 
     user, 
+    authStatus,
+    authError,
+    retryAuthCheck,
     activeTab, 
     openScannerModal, 
     setOpenScannerModal,
@@ -33,24 +37,43 @@ const AppContent: React.FC = () => {
     triggerManualSync
   } = useEcoDex();
 
-  const [showSplash, setShowSplash] = useState(true);
-  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [splashFinished, setSplashFinished] = useState(false);
 
-  // If splash is running, display it
-  if (showSplash) {
+  // 1. AUTH_LOADING or Initial Splash Running
+  if (authStatus === 'AUTH_LOADING' || !splashFinished) {
     return (
-      <SplashScreen
-        onFinish={() => {
-          setShowSplash(false);
-          // If no user profile yet, prompt auth
-          if (!user) {
-            setShowAuthModal(true);
-          }
-        }}
-      />
+      <div className="relative">
+        <SplashScreen onFinish={() => setSplashFinished(true)} />
+        {authError && splashFinished && (
+          <div className="fixed inset-0 z-50 flex flex-col items-center justify-center p-6 bg-slate-900/90 text-white text-center animate-fadeIn">
+            <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center text-2xl mb-3 border border-rose-500/30">
+              ⚠️
+            </div>
+            <h3 className="text-base font-bold text-white mb-1">Firestore Profile Check Error</h3>
+            <p className="text-xs text-slate-300 mb-4 max-w-xs">{authError}</p>
+            <button
+              onClick={() => retryAuthCheck()}
+              className="px-5 py-2.5 rounded-xl bg-forest hover:bg-forest-light text-white text-xs font-bold shadow-nature transition-all cursor-pointer"
+            >
+              Retry Connection
+            </button>
+          </div>
+        )}
+      </div>
     );
   }
 
+  // 2. UNAUTHENTICATED -> Render Full-Screen Login & Sign Up View
+  if (authStatus === 'UNAUTHENTICATED') {
+    return <AuthView />;
+  }
+
+  // 3. AUTHENTICATED_PROFILE_MISSING -> Render Full-Screen Onboarding Registration View
+  if (authStatus === 'AUTHENTICATED_PROFILE_MISSING') {
+    return <OnboardingView />;
+  }
+
+  // 4. AUTHENTICATED_PROFILE_EXISTS -> Render Main Authenticated Application
   return (
     <div className="min-h-screen bg-[#F4F7F4] text-slate-800 flex flex-col items-center relative">
       {/* Sync Toast Notification Banner */}
@@ -109,18 +132,11 @@ const AppContent: React.FC = () => {
               </span>
             )}
 
-            {user ? (
+            {user && (
               <div className="flex items-center gap-1.5 bg-leaf-pale px-2.5 py-1 rounded-full text-forest text-xs font-bold">
                 <span>{user.avatar}</span>
                 <span className="text-[11px]">{user.username}</span>
               </div>
-            ) : (
-              <button
-                onClick={() => setShowAuthModal(true)}
-                className="px-3 py-1.5 rounded-full bg-forest text-white text-xs font-bold shadow-sm hover:bg-forest-light transition-colors cursor-pointer"
-              >
-                Sign In
-              </button>
             )}
           </div>
         </header>
@@ -139,11 +155,6 @@ const AppContent: React.FC = () => {
       </main>
 
       {/* Global Modals */}
-      <AuthModal
-        isOpen={showAuthModal || !user}
-        onClose={() => setShowAuthModal(false)}
-      />
-
       <ScannerModal
         isOpen={openScannerModal}
         onClose={() => setOpenScannerModal(false)}
