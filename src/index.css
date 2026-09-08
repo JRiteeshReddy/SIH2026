@@ -1,0 +1,321 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --color-forest: #2E7D32;
+    --color-forest-dark: #1B5E20;
+    --color-forest-deep: #0F3813;
+    --color-leaf: #66BB6A;
+    --color-leaf-light: #81C784;
+    --color-leaf-pale: #E8F5E9;
+    --color-golden: #FFD54F;
+    --color-golden-dark: #FFA000;
+    --bg-nature-light: #F4F7F4;
+    --bg-nature-card: #FFFFFF;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-journal: 'Newsreader', Georgia, serif;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--bg-nature-light);
+    color: #2D3748;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F1F5F1;
+}
+::-webkit-scrollbar-thumb {
+  background: #A5D6A7;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #66BB6A;
+}
+
+/* Nature Gradients */
+.bg-gradient-forest {
+  background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 50%, #388E3C 100%);
+}
+
+.bg-gradient-leaf {
+  background: linear-gradient(135deg, #2E7D32 0%, #66BB6A 100%);
+}
+
+.bg-gradient-soft-nature {
+  background: linear-gradient(180deg, #F4F7F4 0%, #E8F5E9 100%);
+}
+
+.bg-gradient-golden {
+  background: linear-gradient(135deg, #FFD54F 0%, #FFB300 100%);
+}
+
+/* Rounded Cards */
+.eco-card {
+  background: #FFFFFF;
+  border-radius: 24px;
+  border: 1px solid rgba(46, 125, 50, 0.08);
+  box-shadow: 0 8px 24px rgba(46, 125, 50, 0.06);
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.eco-card:hover {
+  box-shadow: 0 12px 30px rgba(46, 125, 50, 0.12);
+  transform: translateY(-2px);
+}
+
+.eco-card-interactive:active {
+  transform: scale(0.98);
+}
+
+/* Glassmorphism specifically for Achievement popups */
+.glass-achievement {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 20px 50px rgba(27, 94, 32, 0.25);
+  border-radius: 28px;
+}
+
+/* Journal Typography */
+.font-journal {
+  font-family: 'Newsreader', Georgia, serif;
+}
+
+/* Leaf particle upward float */
+@keyframes floatLeafUp {
+  0% {
+    transform: translateY(110vh) translateX(0px) rotate(0deg) scale(0.6);
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.85;
+  }
+  50% {
+    transform: translateY(50vh) translateX(35px) rotate(180deg) scale(1);
+    opacity: 0.9;
+  }
+  85% {
+    opacity: 0.7;
+  }
+  100% {
+    transform: translateY(-10vh) translateX(-20px) rotate(360deg) scale(0.8);
+    opacity: 0;
+  }
+}
+
+.leaf-particle {
+  position: absolute;
+  pointer-events: none;
+  animation: floatLeafUp linear infinite;
+}
+
+/* Pulse Glow */
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(102, 187, 106, 0.4);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 30px rgba(102, 187, 106, 0.7);
+    transform: scale(1.03);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 2.5s infinite ease-in-out;
+}
+
+/* Radar Sweep */
+@keyframes radarSweep {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.radar-sweep {
+  animation: radarSweep 3.5s linear infinite;
+  transform-origin: center;
+}
+
+/* Spring transition */
+.spring-transition {
+  transition: all 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* Leaflet Map overrides */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  border-radius: 20px;
+  z-index: 1;
+}
+
+/* ================= 3D CARD FLIP ANIMATIONS ================= */
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+.preserve-3d {
+  transform-style: preserve-3d;
+}
+
+.backface-hidden {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.rotate-y-180 {
+  transform: rotateY(180deg);
+}
+
+.flip-card-inner {
+  transition: transform 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transform-style: preserve-3d;
+}
+
+.flip-card-inner.is-flipped {
+  transform: rotateY(180deg);
+}
+
+/* ================= RARITY GLOWS FOR ECODEX CARDS ================= */
+/* Common: Natural foliage emerald aura */
+.glow-common {
+  box-shadow: 0 4px 18px rgba(46, 125, 50, 0.16);
+  border-color: rgba(102, 187, 106, 0.4);
+}
+.glow-common:hover {
+  box-shadow: 0 8px 24px rgba(46, 125, 50, 0.28);
+}
+
+/* Rare: Radiant cyan / azure sapphire aura */
+.glow-rare {
+  box-shadow: 0 4px 20px rgba(14, 165, 233, 0.24);
+  border-color: rgba(56, 189, 248, 0.5);
+}
+.glow-rare:hover {
+  box-shadow: 0 8px 30px rgba(14, 165, 233, 0.45);
+}
+
+/* Epic: Royal amethyst / violet mystical aura */
+.glow-epic {
+  box-shadow: 0 4px 24px rgba(168, 85, 247, 0.3);
+  border-color: rgba(192, 132, 252, 0.55);
+}
+.glow-epic:hover {
+  box-shadow: 0 8px 34px rgba(168, 85, 247, 0.5);
+}
+
+/* Legendary: Radiant celestial golden sunburst aura with pulsing gold */
+.glow-legendary {
+  box-shadow: 0 0 25px rgba(245, 158, 11, 0.45), 0 0 50px rgba(251, 191, 36, 0.25);
+  border-color: rgba(251, 191, 36, 0.8);
+  animation: pulseLegendary 3s infinite alternate ease-in-out;
+}
+.glow-legendary:hover {
+  box-shadow: 0 0 35px rgba(245, 158, 11, 0.7), 0 0 65px rgba(251, 191, 36, 0.4);
+}
+
+@keyframes pulseLegendary {
+  0% {
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.35), 0 0 40px rgba(251, 191, 36, 0.2);
+  }
+  100% {
+    box-shadow: 0 0 32px rgba(245, 158, 11, 0.65), 0 0 60px rgba(251, 191, 36, 0.4);
+  }
+}
+
+/* Animated Golden Shimmer Border for Legendary */
+@keyframes borderShimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.legendary-shimmer-border {
+  background: linear-gradient(60deg, #F59E0B, #FDE68A, #D97706, #FBBF24);
+  background-size: 300% 300%;
+  animation: borderShimmer 4s ease infinite;
+}
+
+/* ================= CINEMATIC LEGENDARY DISCOVERY FULL-SCREEN ================= */
+@keyframes rotateSunburst {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-sunburst {
+  animation: rotateSunburst 20s linear infinite;
+  transform-origin: center;
+}
+
+/* Screen rumble shake */
+@keyframes cinematicRumble {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  10% { transform: translate(-2px, -3px) rotate(-0.5deg); }
+  20% { transform: translate(3px, 2px) rotate(0.5deg); }
+  30% { transform: translate(-3px, 2px) rotate(-0.5deg); }
+  40% { transform: translate(2px, -2px) rotate(0.5deg); }
+  50% { transform: translate(-1px, 2px) rotate(-0.3deg); }
+  60% { transform: translate(2px, 1px) rotate(0.3deg); }
+  70% { transform: translate(-2px, -1px) rotate(-0.2deg); }
+  80% { transform: translate(1px, -2px) rotate(0.2deg); }
+  90% { transform: translate(-1px, 1px) rotate(-0.1deg); }
+}
+
+.shake-cinematic {
+  animation: cinematicRumble 0.65s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+/* Swaying Leaf Particles */
+@keyframes swayAndDrift {
+  0% {
+    transform: translateY(115vh) translateX(-20px) rotate(0deg) scale(0.5);
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.95;
+    transform: translateY(90vh) translateX(30px) rotate(45deg) scale(0.85);
+  }
+  50% {
+    opacity: 0.9;
+    transform: translateY(50vh) translateX(-40px) rotate(180deg) scale(1.1);
+  }
+  85% {
+    opacity: 0.8;
+    transform: translateY(15vh) translateX(30px) rotate(300deg) scale(0.9);
+  }
+  100% {
+    transform: translateY(-15vh) translateX(-10px) rotate(420deg) scale(0.7);
+    opacity: 0;
+  }
+}
+
+.leaf-particle-sway {
+  position: absolute;
+  pointer-events: none;
+  animation: swayAndDrift linear infinite;
+}
+

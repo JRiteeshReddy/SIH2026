@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">EcoDex</string>
+    <string name="title_activity_main">EcoDex</string>
+    <string name="package_name">com.ecodex.nature</string>
+    <string name="custom_url_scheme">com.ecodex.nature</string>
+</resources>
