@@ -218,34 +218,48 @@ export class AIModelService {
     }
 
     // Wrap tensor creation, normalization, and inference inside tf.tidy to automatically dispose all intermediate tensors
-    const { probabilities, topIndex, maxProb } = tf.tidy(() => {
-      // 1. Create tensor from pixel source (Shape: [height, width, 3])
-      const rawTensor = tf.browser.fromPixels(videoOrCanvas);
+    let probabilities: number[] = [];
+    let topIndex = 0;
+    let maxProb = 0;
 
-      // 2. Resize to 224x224 bilinear
-      const resized = tf.image.resizeBilinear(rawTensor, [this.inputSize, this.inputSize]);
+    try {
+      const result = tf.tidy(() => {
+        // 1. Create tensor from pixel source (Shape: [height, width, 3])
+        const rawTensor = tf.browser.fromPixels(videoOrCanvas);
 
-      // 3. Normalize pixel values to [-1, 1] as expected by Teachable Machine MobileNet:
-      // normalized = (pixel / 127.5) - 1.0
-      const normalized = resized.div(tf.scalar(127.5)).sub(tf.scalar(1.0));
+        // 2. Resize to 224x224 bilinear
+        const resized = tf.image.resizeBilinear(rawTensor, [this.inputSize, this.inputSize]);
 
-      // 4. Expand dimensions for batch input: [1, 224, 224, 3]
-      const batched = normalized.expandDims(0);
+        // 3. Normalize pixel values to [-1, 1] as expected by Teachable Machine MobileNet:
+        // normalized = (pixel / 127.5) - 1.0
+        const normalized = resized.div(tf.scalar(127.5)).sub(tf.scalar(1.0));
 
-      // 5. Run model prediction
-      const outputTensor = this.model!.predict(batched) as tf.Tensor;
+        // 4. Expand dimensions for batch input: [1, 224, 224, 3]
+        const batched = normalized.expandDims(0);
 
-      // Extract prediction values synchronously before tidy disposes tensors
-      const probsData = Array.from(outputTensor.dataSync());
-      const argmaxVal = tf.argMax(outputTensor, 1).dataSync()[0];
-      const maxVal = tf.max(outputTensor, 1).dataSync()[0];
+        // 5. Run model prediction (handle potential array of tensors)
+        const rawOutput = this.model!.predict(batched);
+        const outputTensor = Array.isArray(rawOutput) ? rawOutput[0] : (rawOutput as tf.Tensor);
 
-      return {
-        probabilities: probsData,
-        topIndex: argmaxVal,
-        maxProb: maxVal
-      };
-    });
+        // Extract prediction values synchronously before tidy disposes tensors
+        const probsData = Array.from(outputTensor.dataSync());
+        const argmaxVal = tf.argMax(outputTensor, 1).dataSync()[0];
+        const mVal = tf.max(outputTensor, 1).dataSync()[0];
+
+        return {
+          probabilities: probsData,
+          topIndex: Number(argmaxVal),
+          maxProb: Number(mVal)
+        };
+      });
+
+      probabilities = result.probabilities;
+      topIndex = result.topIndex;
+      maxProb = result.maxProb;
+    } catch (tensorErr: unknown) {
+      console.error('TensorFlow.js inference error:', tensorErr);
+      throw new Error(`Inference error: ${tensorErr instanceof Error ? tensorErr.message : 'Tensor processing failed'}`);
+    }
 
     const inferenceTimeMs = Math.round(performance.now() - startTime);
 

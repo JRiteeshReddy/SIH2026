@@ -120,8 +120,13 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
 
     // Capture the frame directly from live camera feed
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const compactPhotoUrl = compressCanvasToThumbnail(canvas, 360, 0.65) || canvas.toDataURL('image/jpeg', 0.5);
-    setCapturedImage(compactPhotoUrl);
+
+    // High quality photo (90% quality, crisp HD) for on-screen preview - no heavy compression
+    const highQualityPhotoUrl = canvas.toDataURL('image/jpeg', 0.90);
+    setCapturedImage(highQualityPhotoUrl);
+
+    // Balanced sharp photo for local storage and Firestore (720px at 0.80 quality)
+    const storagePhotoUrl = compressCanvasToThumbnail(canvas, 720, 0.80) || highQualityPhotoUrl;
 
     // 3. Anti-Cheat Verification (Camera live, GPS active, Timestamp, anti-screenshot)
     const antiCheatResult = await aiModelService.verifyAntiCheat(streamRef.current, canvas);
@@ -141,18 +146,19 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
       audio.playScanSuccess();
 
       // Requirement 7: If confidence is >= 85%, save that animal to user's EcoDex profile in Firebase/Firestore
-      if (pred.confidence >= 0.85) {
+      if (pred.confidence >= 0.85 && pred.species) {
         recordDiscovery(
           pred.species.id,
-          compactPhotoUrl,
+          storagePhotoUrl,
           pred.confidence,
           antiCheatResult.coordinates
         );
         setIsSavedToEcoDex(true);
       }
-    } catch (e) {
+    } catch (e: unknown) {
       console.error('Keras model prediction failed:', e);
-      setAntiCheatError('Model inference error. Please try scanning again.');
+      const errorMsg = e instanceof Error ? e.message : 'Model inference error. Please try scanning again.';
+      setAntiCheatError(errorMsg);
     } finally {
       setIsProcessing(false);
     }
