@@ -52,46 +52,73 @@ export class AIModelService {
     this.isModelLoading = true;
 
     try {
-      // 1. Load labels from converted_keras/labels.txt
-      const labelSources = ['/converted_keras/labels.txt', '/model/labels.txt'];
-      for (const src of labelSources) {
+      // 1. Load labels from metadata.json or labels.txt
+      const metadataSources = [
+        '/converted_keras/metadata.json',
+        '/my_model/metadata.json',
+        '/model/metadata.json'
+      ];
+      for (const metaSrc of metadataSources) {
         try {
-          const res = await fetch(src);
+          const res = await fetch(metaSrc);
           if (res.ok) {
-            const text = await res.text();
-            this.labels = text
-              .split('\n')
-              .map(line => line.trim())
-              .filter(line => line.length > 0)
-              .map(line => {
-                // "0 Crow" -> "Crow"
-                const parts = line.split(' ');
-                return parts.length > 1 ? parts.slice(1).join(' ') : line;
-              });
-            if (this.labels.length > 0) {
-              console.info(`EcoDex AI: Loaded ${this.labels.length} class labels from ${src}`);
+            const meta = await res.json();
+            if (Array.isArray(meta.labels) && meta.labels.length > 0) {
+              this.labels = meta.labels;
+              console.info(`EcoDex AI: Loaded ${this.labels.length} class labels from ${metaSrc}:`, this.labels);
               break;
             }
           }
         } catch (e) {
-          console.warn(`Could not load labels from ${src}:`, e);
+          console.warn(`Could not load metadata from ${metaSrc}:`, e);
+        }
+      }
+
+      // Fallback to labels.txt if metadata.json not found
+      if (!this.labels.length) {
+        const labelSources = ['/converted_keras/labels.txt', '/my_model/labels.txt', '/model/labels.txt'];
+        for (const src of labelSources) {
+          try {
+            const res = await fetch(src);
+            if (res.ok) {
+              const text = await res.text();
+              this.labels = text
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0)
+                .map(line => {
+                  const parts = line.split(' ');
+                  return parts.length > 1 ? parts.slice(1).join(' ') : line;
+                });
+              if (this.labels.length > 0) {
+                console.info(`EcoDex AI: Loaded ${this.labels.length} class labels from ${src}`);
+                break;
+              }
+            }
+          } catch (e) {
+            console.warn(`Could not load labels from ${src}:`, e);
+          }
         }
       }
 
       if (!this.labels.length) {
-        this.labels = INITIAL_SPECIES.map(s => s.name);
+        this.labels = ['Cat', 'Dog', 'Elephant', 'Tiger', 'Lion'];
       }
 
-      // 2. Load trained Keras model converted to web format
-      const modelSources = ['/converted_keras/model.json', '/model/model.json'];
+      // 2. Load trained Teachable Machine Keras / TFJS model
+      const modelSources = [
+        '/converted_keras/model.json',
+        '/my_model/model.json',
+        '/model/model.json'
+      ];
       for (const src of modelSources) {
         try {
           this.model = await tf.loadLayersModel(src);
           this.modelLoaded = true;
-          console.info(`EcoDex AI: Successfully loaded Teachable Machine Keras model from ${src}`);
+          console.info(`EcoDex AI: Successfully loaded Teachable Machine model from ${src}`);
           break;
         } catch (e) {
-          console.warn(`Could not load Keras model from ${src}:`, e);
+          console.warn(`Could not load model from ${src}:`, e);
         }
       }
 

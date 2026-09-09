@@ -198,7 +198,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-fadeIn">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-fadeIn">
       <div className="relative w-full max-w-md bg-slate-950 text-white rounded-card-lg border border-leaf/40 shadow-2xl overflow-hidden flex flex-col max-h-[94vh]">
         {/* Header Bar */}
         <div className="flex items-center justify-between px-4 py-3 bg-slate-900/90 border-b border-white/10">
@@ -215,7 +215,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
           {/* Model Status Pill */}
           <div className="flex items-center gap-1.5 bg-white/10 px-2.5 py-0.5 rounded-full text-[10px] text-slate-300 font-mono">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>converted_keras ({modelReady ? 'Ready' : 'Loading...'})</span>
+            <span>Teachable Machine 5 Animals ({modelReady ? 'Ready' : 'Loading...'})</span>
           </div>
 
           <button
@@ -469,7 +469,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
                 {isProcessing ? 'Running Keras Model (224x224)...' : 'Tap to Capture Live Wildlife Photo'}
               </span>
               <p className="text-[10px] text-slate-500 mt-0.5">
-                Teachable Machine Keras Model • 23 Wildlife Classes
+                Teachable Machine Model • Cat, Dog, Elephant, Tiger, Lion
               </p>
             </div>
           </div>
