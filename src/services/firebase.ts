@@ -38,18 +38,35 @@ const firebaseConfig = {
 };
 
 // Singleton initialization for Firebase App, Auth, and Firestore
-let app: FirebaseApp;
-let auth: Auth;
-let db: Firestore;
+let app: FirebaseApp | null = null;
+let auth: Auth | null = null;
+let db: Firestore | null = null;
 
-if (!getApps().length) {
-  app = initializeApp(firebaseConfig);
+const hasValidConfig = Boolean(
+  firebaseConfig.apiKey && 
+  firebaseConfig.apiKey.trim() !== '' && 
+  firebaseConfig.apiKey !== 'DEMO_MODE' &&
+  !firebaseConfig.apiKey.includes('placeholder')
+);
+
+if (hasValidConfig) {
+  try {
+    if (!getApps().length) {
+      app = initializeApp(firebaseConfig);
+    } else {
+      app = getApps()[0];
+    }
+    auth = getAuth(app);
+    db = getFirestore(app);
+  } catch (err) {
+    console.warn('Firebase initialization error, continuing in local offline mode:', err);
+    app = null;
+    auth = null;
+    db = null;
+  }
 } else {
-  app = getApps()[0];
+  console.info('No live Firebase API key detected. Running in seamless local offline mode.');
 }
-
-auth = getAuth(app);
-db = getFirestore(app);
 
 export { app, auth, db };
 
@@ -95,9 +112,19 @@ export const formatAuthError = (err: unknown): string => {
  * Returns authenticated FirebaseUser.
  */
 export const loginWithGoogle = async (): Promise<FirebaseUser> => {
-  const provider = new GoogleAuthProvider();
-  const cred = await signInWithPopup(auth, provider);
-  return cred.user;
+  if (auth) {
+    const provider = new GoogleAuthProvider();
+    const cred = await signInWithPopup(auth, provider);
+    return cred.user;
+  }
+  // Seamless demo mode fallback
+  const mockUser = {
+    uid: 'google_explorer_' + Date.now().toString().slice(-4),
+    email: 'nature.ranger@ecodex.org',
+    displayName: 'Nature Ranger'
+  } as unknown as FirebaseUser;
+  localStorage.setItem('ecodex_active_uid', mockUser.uid);
+  return mockUser;
 };
 
 /**
@@ -105,8 +132,19 @@ export const loginWithGoogle = async (): Promise<FirebaseUser> => {
  * Returns authenticated FirebaseUser.
  */
 export const loginWithEmail = async (email: string, pass: string): Promise<FirebaseUser> => {
-  const cred = await signInWithEmailAndPassword(auth, email, pass);
-  return cred.user;
+  if (auth) {
+    const cred = await signInWithEmailAndPassword(auth, email, pass);
+    return cred.user;
+  }
+  // Seamless demo mode fallback
+  const mockUid = 'user_' + Math.abs(email.split('').reduce((a, b) => (a << 5) - a + b.charCodeAt(0), 0));
+  const mockUser = {
+    uid: mockUid,
+    email,
+    displayName: email.split('@')[0]
+  } as unknown as FirebaseUser;
+  localStorage.setItem('ecodex_active_uid', mockUser.uid);
+  return mockUser;
 };
 
 /**
@@ -114,29 +152,71 @@ export const loginWithEmail = async (email: string, pass: string): Promise<Fireb
  * Returns created FirebaseUser with UID.
  */
 export const registerWithEmail = async (email: string, pass: string): Promise<FirebaseUser> => {
-  const cred = await createUserWithEmailAndPassword(auth, email, pass);
-  return cred.user;
+  if (auth) {
+    const cred = await createUserWithEmailAndPassword(auth, email, pass);
+    return cred.user;
+  }
+  const mockUser = {
+    uid: 'user_' + Date.now(),
+    email,
+    displayName: email.split('@')[0]
+  } as unknown as FirebaseUser;
+  localStorage.setItem('ecodex_active_uid', mockUser.uid);
+  return mockUser;
 };
 
 /**
  * Send Password Reset Email.
  */
 export const resetPasswordWithEmail = async (email: string): Promise<void> => {
-  await sendPasswordResetEmail(auth, email);
+  if (auth) {
+    await sendPasswordResetEmail(auth, email);
+  }
 };
 
 /**
  * Sign out current authenticated user.
  */
 export const logoutUser = async (): Promise<void> => {
-  await signOut(auth);
+  if (auth) {
+    await signOut(auth);
+  }
+  localStorage.removeItem('ecodex_active_uid');
 };
 
 /**
  * Listen to Firebase Auth state updates across sessions/refreshes.
  */
 export const subscribeToAuthState = (callback: (user: FirebaseUser | null) => void) => {
-  return onAuthStateChanged(auth, callback);
+  if (auth) {
+    return onAuthStateChanged(auth, callback);
+  }
+  // Local storage session fallback
+  const activeUid = localStorage.getItem('ecodex_active_uid');
+  if (activeUid) {
+    const cachedProfileRaw = localStorage.getItem(`ecodex_user_${activeUid}`) || localStorage.getItem('ecodex_current_user');
+    if (cachedProfileRaw) {
+      try {
+        const parsed = JSON.parse(cachedProfileRaw);
+        callback({
+          uid: parsed.uid || activeUid,
+          email: parsed.email || 'explorer@ecodex.org',
+          displayName: parsed.username || 'Explorer'
+        } as unknown as FirebaseUser);
+        return () => {};
+      } catch {
+        // ignore
+      }
+    }
+    callback({
+      uid: activeUid,
+      email: 'explorer@ecodex.org',
+      displayName: 'Explorer'
+    } as unknown as FirebaseUser);
+  } else {
+    callback(null);
+  }
+  return () => {};
 };
 
 // ==================================================
@@ -180,7 +260,7 @@ export const saveUserProfileToFirestore = async (profile: UserProfile): Promise<
   localStorage.setItem(`ecodex_user_${profile.uid}`, JSON.stringify(payload));
   localStorage.setItem('ecodex_active_uid', profile.uid);
 
-  if (navigator.onLine && db && auth.currentUser) {
+  if (navigator.onLine && db && auth?.currentUser) {
     try {
       await setDoc(doc(db, 'users', profile.uid), payload, { merge: true });
       return true;
@@ -237,8 +317,8 @@ export const fetchUserProfileResult = async (uid: string): Promise<FetchProfileR
     }
   }
 
-  // If offline, check local cache
-  const cached = localStorage.getItem(`ecodex_user_${uid}`);
+  // If offline or in demo mode, check local cache
+  const cached = localStorage.getItem(`ecodex_user_${uid}`) || localStorage.getItem('ecodex_current_user');
   if (cached) {
     try {
       const data = JSON.parse(cached) as UserProfile;
@@ -246,6 +326,11 @@ export const fetchUserProfileResult = async (uid: string): Promise<FetchProfileR
     } catch {
       // cache corrupted
     }
+  }
+
+  // If demo mode (no db configured), treat as missing so user proceeds to onboarding view
+  if (!db) {
+    return { status: 'missing', profile: null };
   }
 
   // If offline and no local cache, return network error state rather than treating as missing profile
@@ -399,7 +484,7 @@ export const getLocalDiscoveries = (): DiscoveryRecord[] => {
 // ==================================================
 
 export const submitReportToFirestore = async (report: ConservationReport): Promise<boolean> => {
-  const currentUserId = auth.currentUser?.uid || report.reporterUserId;
+  const currentUserId = auth?.currentUser?.uid || report.reporterUserId;
   const payload: ConservationReport = {
     ...report,
     reporterUserId: currentUserId,
@@ -407,7 +492,7 @@ export const submitReportToFirestore = async (report: ConservationReport): Promi
     status: report.status || 'pending'
   };
 
-  if (navigator.onLine && db && auth.currentUser) {
+  if (navigator.onLine && db && auth?.currentUser) {
     try {
       await setDoc(doc(db, 'reports', report.id), payload);
       return true;
@@ -434,7 +519,7 @@ export const syncPendingWithFirebase = async (): Promise<{
   syncedProfile: boolean;
   success: boolean;
 }> => {
-  if (!navigator.onLine || !db || !auth.currentUser) {
+  if (!navigator.onLine || !db || !auth?.currentUser) {
     return { syncedExpeditions: 0, syncedDiscoveries: 0, syncedProfile: false, success: false };
   }
 
