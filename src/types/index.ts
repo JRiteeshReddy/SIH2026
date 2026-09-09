@@ -156,7 +156,7 @@ export interface Achievement {
   description: string;
   icon: string;
   tier: 'Bronze' | 'Silver' | 'Gold' | 'Emerald';
-  category?: 'Discovery' | 'Fitness' | 'Streaks' | 'Rank' | 'Special';
+  category?: 'Discovery' | 'Fitness' | 'Streaks' | 'Rank' | 'Special' | 'Exploration' | 'Milestones';
   xpReward: number;
   unlocked: boolean;
   progress: number;

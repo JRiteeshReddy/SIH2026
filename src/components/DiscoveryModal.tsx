@@ -24,7 +24,7 @@ export const DiscoveryModal: React.FC = () => {
       audio.playLegendaryEncounter();
       // Massive golden confetti barrage for Legendary
       const end = Date.now() + 2500;
-      const interval: NodeJS.Timeout = setInterval(() => {
+      const interval: ReturnType<typeof setInterval> = setInterval(() => {
         if (Date.now() > end) {
           return clearInterval(interval);
         }
