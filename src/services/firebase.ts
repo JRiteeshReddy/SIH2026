@@ -25,6 +25,7 @@ import {
   Firestore
 } from 'firebase/firestore';
 import { UserProfile, Expedition, DiscoveryRecord, LeaderboardUser, ConservationReport } from '../types';
+import { safeStorageSet } from './safeStorage';
 
 // Read Firebase Web SDK Configuration strictly from Vite Environment Variables
 const firebaseConfig = {
@@ -38,18 +39,35 @@ const firebaseConfig = {
 };
 
 // Singleton initialization for Firebase App, Auth, and Firestore
-let app: FirebaseApp;
-let auth: Auth;
-let db: Firestore;
+let app: FirebaseApp | null = null;
+let auth: Auth | null = null;
+let db: Firestore | null = null;
 
-if (!getApps().length) {
-  app = initializeApp(firebaseConfig);
+const hasValidConfig = Boolean(
+  firebaseConfig.apiKey && 
+  firebaseConfig.apiKey.trim() !== '' && 
+  firebaseConfig.apiKey !== 'DEMO_MODE' &&
+  !firebaseConfig.apiKey.includes('placeholder')
+);
+
+if (hasValidConfig) {
+  try {
+    if (!getApps().length) {
+      app = initializeApp(firebaseConfig);
+    } else {
+      app = getApps()[0];
+    }
+    auth = getAuth(app);
+    db = getFirestore(app);
+  } catch (err) {
+    console.warn('Firebase initialization error, continuing in local offline mode:', err);
+    app = null;
+    auth = null;
+    db = null;
+  }
 } else {
-  app = getApps()[0];
+  console.info('No live Firebase API key detected. Running in seamless local offline mode.');
 }
-
-auth = getAuth(app);
-db = getFirestore(app);
 
 export { app, auth, db };
 
@@ -95,9 +113,19 @@ export const formatAuthError = (err: unknown): string => {
  * Returns authenticated FirebaseUser.
  */
 export const loginWithGoogle = async (): Promise<FirebaseUser> => {
-  const provider = new GoogleAuthProvider();
-  const cred = await signInWithPopup(auth, provider);
-  return cred.user;
+  if (auth) {
+    const provider = new GoogleAuthProvider();
+    const cred = await signInWithPopup(auth, provider);
+    return cred.user;
+  }
+  // Seamless demo mode fallback
+  const mockUser = {
+    uid: 'google_explorer_' + Date.now().toString().slice(-4),
+    email: 'nature.ranger@ecodex.org',
+    displayName: 'Nature Ranger'
+  } as unknown as FirebaseUser;
+  safeStorageSet('ecodex_active_uid', mockUser.uid);
+  return mockUser;
 };
 
 /**
@@ -105,8 +133,19 @@ export const loginWithGoogle = async (): Promise<FirebaseUser> => {
  * Returns authenticated FirebaseUser.
  */
 export const loginWithEmail = async (email: string, pass: string): Promise<FirebaseUser> => {
-  const cred = await signInWithEmailAndPassword(auth, email, pass);
-  return cred.user;
+  if (auth) {
+    const cred = await signInWithEmailAndPassword(auth, email, pass);
+    return cred.user;
+  }
+  // Seamless demo mode fallback
+  const mockUid = 'user_' + Math.abs(email.split('').reduce((a, b) => (a << 5) - a + b.charCodeAt(0), 0));
+  const mockUser = {
+    uid: mockUid,
+    email,
+    displayName: email.split('@')[0]
+  } as unknown as FirebaseUser;
+  safeStorageSet('ecodex_active_uid', mockUser.uid);
+  return mockUser;
 };
 
 /**
@@ -114,29 +153,71 @@ export const loginWithEmail = async (email: string, pass: string): Promise<Fireb
  * Returns created FirebaseUser with UID.
  */
 export const registerWithEmail = async (email: string, pass: string): Promise<FirebaseUser> => {
-  const cred = await createUserWithEmailAndPassword(auth, email, pass);
-  return cred.user;
+  if (auth) {
+    const cred = await createUserWithEmailAndPassword(auth, email, pass);
+    return cred.user;
+  }
+  const mockUser = {
+    uid: 'user_' + Date.now(),
+    email,
+    displayName: email.split('@')[0]
+  } as unknown as FirebaseUser;
+  safeStorageSet('ecodex_active_uid', mockUser.uid);
+  return mockUser;
 };
 
 /**
  * Send Password Reset Email.
  */
 export const resetPasswordWithEmail = async (email: string): Promise<void> => {
-  await sendPasswordResetEmail(auth, email);
+  if (auth) {
+    await sendPasswordResetEmail(auth, email);
+  }
 };
 
 /**
  * Sign out current authenticated user.
  */
 export const logoutUser = async (): Promise<void> => {
-  await signOut(auth);
+  if (auth) {
+    await signOut(auth);
+  }
+  localStorage.removeItem('ecodex_active_uid');
 };
 
 /**
  * Listen to Firebase Auth state updates across sessions/refreshes.
  */
 export const subscribeToAuthState = (callback: (user: FirebaseUser | null) => void) => {
-  return onAuthStateChanged(auth, callback);
+  if (auth) {
+    return onAuthStateChanged(auth, callback);
+  }
+  // Local storage session fallback
+  const activeUid = localStorage.getItem('ecodex_active_uid');
+  if (activeUid) {
+    const cachedProfileRaw = localStorage.getItem(`ecodex_user_${activeUid}`) || localStorage.getItem('ecodex_current_user');
+    if (cachedProfileRaw) {
+      try {
+        const parsed = JSON.parse(cachedProfileRaw);
+        callback({
+          uid: parsed.uid || activeUid,
+          email: parsed.email || 'explorer@ecodex.org',
+          displayName: parsed.username || 'Explorer'
+        } as unknown as FirebaseUser);
+        return () => {};
+      } catch {
+        // ignore
+      }
+    }
+    callback({
+      uid: activeUid,
+      email: 'explorer@ecodex.org',
+      displayName: 'Explorer'
+    } as unknown as FirebaseUser);
+  } else {
+    callback(null);
+  }
+  return () => {};
 };
 
 // ==================================================
@@ -157,7 +238,7 @@ const getPendingItems = <T>(key: string): T[] => {
 };
 
 const setPendingItems = <T>(key: string, items: T[]) => {
-  localStorage.setItem(key, JSON.stringify(items));
+  safeStorageSet(key, JSON.stringify(items));
 };
 
 export const getPendingSyncCount = (): number => {
@@ -177,10 +258,10 @@ export const saveUserProfileToFirestore = async (profile: UserProfile): Promise<
   };
 
   // Cache locally
-  localStorage.setItem(`ecodex_user_${profile.uid}`, JSON.stringify(payload));
-  localStorage.setItem('ecodex_active_uid', profile.uid);
+  safeStorageSet(`ecodex_user_${profile.uid}`, JSON.stringify(payload));
+  safeStorageSet('ecodex_active_uid', profile.uid);
 
-  if (navigator.onLine && db && auth.currentUser) {
+  if (navigator.onLine && db && auth?.currentUser) {
     try {
       await setDoc(doc(db, 'users', profile.uid), payload, { merge: true });
       return true;
@@ -201,12 +282,12 @@ export const saveUserProfileToFirestore = async (profile: UserProfile): Promise<
         return true;
       } catch (err) {
         console.warn('Fallback profile save failed, queueing offline:', err);
-        localStorage.setItem(PENDING_PROFILE_KEY, JSON.stringify(payload));
+        safeStorageSet(PENDING_PROFILE_KEY, JSON.stringify(payload));
         return false;
       }
     }
   } else {
-    localStorage.setItem(PENDING_PROFILE_KEY, JSON.stringify(payload));
+    safeStorageSet(PENDING_PROFILE_KEY, JSON.stringify(payload));
     return false;
   }
 };
@@ -226,7 +307,7 @@ export const fetchUserProfileResult = async (uid: string): Promise<FetchProfileR
       const snap = await getDoc(doc(db, 'users', uid));
       if (snap.exists()) {
         const data = snap.data() as UserProfile;
-        localStorage.setItem(`ecodex_user_${uid}`, JSON.stringify(data));
+        safeStorageSet(`ecodex_user_${uid}`, JSON.stringify(data));
         return { status: 'exists', profile: data };
       } else {
         return { status: 'missing', profile: null };
@@ -237,8 +318,8 @@ export const fetchUserProfileResult = async (uid: string): Promise<FetchProfileR
     }
   }
 
-  // If offline, check local cache
-  const cached = localStorage.getItem(`ecodex_user_${uid}`);
+  // If offline or in demo mode, check local cache
+  const cached = localStorage.getItem(`ecodex_user_${uid}`) || localStorage.getItem('ecodex_current_user');
   if (cached) {
     try {
       const data = JSON.parse(cached) as UserProfile;
@@ -246,6 +327,11 @@ export const fetchUserProfileResult = async (uid: string): Promise<FetchProfileR
     } catch {
       // cache corrupted
     }
+  }
+
+  // If demo mode (no db configured), treat as missing so user proceeds to onboarding view
+  if (!db) {
+    return { status: 'missing', profile: null };
   }
 
   // If offline and no local cache, return network error state rather than treating as missing profile
@@ -300,7 +386,7 @@ export const fetchLeaderboardFromFirestore = async (): Promise<LeaderboardUser[]
 // ==================================================
 
 export const logExpeditionToFirestore = async (expedition: Expedition): Promise<void> => {
-  const currentUid = auth.currentUser?.uid || expedition.userId;
+  const currentUid = auth?.currentUser?.uid || expedition.userId;
   const payload: Expedition = {
     ...expedition,
     userId: currentUid,
@@ -310,9 +396,9 @@ export const logExpeditionToFirestore = async (expedition: Expedition): Promise<
   // Always cache locally in device history
   const history = getLocalExpeditions();
   history.unshift(payload);
-  localStorage.setItem('ecodex_expedition_history', JSON.stringify(history.slice(0, 50)));
+  safeStorageSet('ecodex_expedition_history', JSON.stringify(history.slice(0, 50)));
 
-  if (navigator.onLine && db && auth.currentUser) {
+  if (navigator.onLine && db && auth?.currentUser) {
     try {
       await setDoc(doc(db, 'expeditions', expedition.id), payload);
       return;
@@ -341,7 +427,7 @@ export const getLocalExpeditions = (): Expedition[] => {
 // ==================================================
 
 export const logDiscoveryToFirestore = async (discovery: DiscoveryRecord): Promise<void> => {
-  const currentUid = auth.currentUser?.uid || discovery.userId;
+  const currentUid = auth?.currentUser?.uid || discovery.userId;
   const latVal = typeof discovery.latitude === 'number' ? discovery.latitude : (discovery.coordinates?.lat ?? 18.5204);
   const lngVal = typeof discovery.longitude === 'number' ? discovery.longitude : (discovery.coordinates?.lng ?? 73.8567);
   const confVal = typeof discovery.confidence === 'number' ? Math.min(1, Math.max(0, discovery.confidence)) : 0.95;
@@ -361,16 +447,24 @@ export const logDiscoveryToFirestore = async (discovery: DiscoveryRecord): Promi
     expeditionId: discovery.expeditionId || null,
     createdAt: discovery.createdAt || new Date().toISOString(),
     localImageUri: discovery.localImageUri || discovery.photoUrl,
+    photoUrl: discovery.photoUrl || discovery.localImageUri,
     locationName: discovery.locationName || 'Nature Sanctuary'
   };
 
-  // Always cache locally in device history
+  // Always cache locally in device history with safe payload sizing
   const history = getLocalDiscoveries();
-  history.unshift(payload);
-  localStorage.setItem('ecodex_discovery_history', JSON.stringify(history.slice(0, 50)));
+  const cachedItem = { ...payload };
+  if (cachedItem.photoUrl && cachedItem.photoUrl.length > 30000) {
+    cachedItem.photoUrl = '';
+  }
+  if (cachedItem.localImageUri && cachedItem.localImageUri.length > 30000) {
+    cachedItem.localImageUri = '';
+  }
+  history.unshift(cachedItem);
+  safeStorageSet('ecodex_discovery_history', JSON.stringify(history.slice(0, 50)));
 
   // Do NOT upload base64 or images to Firebase Storage (staying on Spark plan)
-  if (navigator.onLine && db && auth.currentUser) {
+  if (navigator.onLine && db && auth?.currentUser) {
     try {
       await setDoc(doc(db, 'discoveries', discovery.id), payload);
       return;
@@ -399,7 +493,7 @@ export const getLocalDiscoveries = (): DiscoveryRecord[] => {
 // ==================================================
 
 export const submitReportToFirestore = async (report: ConservationReport): Promise<boolean> => {
-  const currentUserId = auth.currentUser?.uid || report.reporterUserId;
+  const currentUserId = auth?.currentUser?.uid || report.reporterUserId;
   const payload: ConservationReport = {
     ...report,
     reporterUserId: currentUserId,
@@ -407,7 +501,7 @@ export const submitReportToFirestore = async (report: ConservationReport): Promi
     status: report.status || 'pending'
   };
 
-  if (navigator.onLine && db && auth.currentUser) {
+  if (navigator.onLine && db && auth?.currentUser) {
     try {
       await setDoc(doc(db, 'reports', report.id), payload);
       return true;
@@ -434,7 +528,7 @@ export const syncPendingWithFirebase = async (): Promise<{
   syncedProfile: boolean;
   success: boolean;
 }> => {
-  if (!navigator.onLine || !db || !auth.currentUser) {
+  if (!navigator.onLine || !db || !auth?.currentUser) {
     return { syncedExpeditions: 0, syncedDiscoveries: 0, syncedProfile: false, success: false };
   }
 

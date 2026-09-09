@@ -1,3 +1,4 @@
+import * as tf from '@tensorflow/tfjs';
 import { INITIAL_SPECIES } from '../data/speciesData';
 import { Species } from '../types';
 
@@ -25,43 +26,113 @@ export interface AntiCheatRecord {
 
 export class AIModelService {
   private labels: string[] = [];
+  private model: tf.LayersModel | null = null;
+  private isModelLoading: boolean = false;
   private modelLoaded: boolean = false;
-  private readonly inputSize = 224; // Standard Teachable Machine input resolution
+  private readonly inputSize = 224;
 
   constructor() {
     this.initModel();
   }
 
+  /**
+   * Loads class labels from converted_keras/labels.txt
+   * and trained Keras model from converted_keras/model.json
+   */
   public async initModel(): Promise<boolean> {
+    if (this.model && this.labels.length > 0) {
+      this.modelLoaded = true;
+      return true;
+    }
+
+    if (this.isModelLoading) {
+      return false;
+    }
+
+    this.isModelLoading = true;
+
     try {
-      // Attempt to load labels.txt locally from /model/labels.txt
-      const res = await fetch('/model/labels.txt');
-      if (res.ok) {
-        const text = await res.text();
-        this.labels = text
-          .split('\n')
-          .map(line => line.trim())
-          .filter(line => line.length > 0)
-          .map(line => {
-            // "0 Crow" -> "Crow"
-            const parts = line.split(' ');
-            return parts.length > 1 ? parts.slice(1).join(' ') : line;
-          });
+      // 1. Load labels from metadata.json or labels.txt
+      const metadataSources = [
+        '/converted_keras/metadata.json',
+        '/my_model/metadata.json',
+        '/model/metadata.json'
+      ];
+      for (const metaSrc of metadataSources) {
+        try {
+          const res = await fetch(metaSrc);
+          if (res.ok) {
+            const meta = await res.json();
+            if (Array.isArray(meta.labels) && meta.labels.length > 0) {
+              this.labels = meta.labels;
+              console.info(`EcoDex AI: Loaded ${this.labels.length} class labels from ${metaSrc}:`, this.labels);
+              break;
+            }
+          }
+        } catch (e) {
+          console.warn(`Could not load metadata from ${metaSrc}:`, e);
+        }
       }
-    } catch {
-      // Use standard fallback labels from INITIAL_SPECIES
-    }
 
-    if (!this.labels.length) {
-      this.labels = INITIAL_SPECIES.map(s => s.name);
-    }
+      // Fallback to labels.txt if metadata.json not found
+      if (!this.labels.length) {
+        const labelSources = ['/converted_keras/labels.txt', '/my_model/labels.txt', '/model/labels.txt'];
+        for (const src of labelSources) {
+          try {
+            const res = await fetch(src);
+            if (res.ok) {
+              const text = await res.text();
+              this.labels = text
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0)
+                .map(line => {
+                  const parts = line.split(' ');
+                  return parts.length > 1 ? parts.slice(1).join(' ') : line;
+                });
+              if (this.labels.length > 0) {
+                console.info(`EcoDex AI: Loaded ${this.labels.length} class labels from ${src}`);
+                break;
+              }
+            }
+          } catch (e) {
+            console.warn(`Could not load labels from ${src}:`, e);
+          }
+        }
+      }
 
-    this.modelLoaded = true;
-    return true;
+      if (!this.labels.length) {
+        this.labels = ['Cat', 'Dog', 'Elephant', 'Tiger', 'Lion'];
+      }
+
+      // 2. Load trained Teachable Machine Keras / TFJS model
+      const modelSources = [
+        '/converted_keras/model.json',
+        '/my_model/model.json',
+        '/model/model.json'
+      ];
+      for (const src of modelSources) {
+        try {
+          this.model = await tf.loadLayersModel(src);
+          this.modelLoaded = true;
+          console.info(`EcoDex AI: Successfully loaded Teachable Machine model from ${src}`);
+          break;
+        } catch (e) {
+          console.warn(`Could not load model from ${src}:`, e);
+        }
+      }
+
+      return Boolean(this.model);
+    } catch (err) {
+      console.error('EcoDex AI: Model initialization failed:', err);
+      return false;
+    } finally {
+      this.isModelLoading = false;
+    }
   }
 
   public isLoaded(): boolean {
-    return this.modelLoaded;
+    return this.modelLoaded && Boolean(this.model);
   }
 
   public getLabels(): string[] {
@@ -69,120 +140,177 @@ export class AIModelService {
   }
 
   /**
-   * Resizes captured image to model input size (224x224)
-   * Preprocesses pixel data into normalized tensor array [-1, 1]
-   * Runs local prediction across all classes in labels.txt
+   * Preprocesses captured image (224x224, normalized to [-1, 1]),
+   * runs inference through the trained Keras model,
+   * and extracts the class prediction with highest confidence.
    */
   public async predict(
-    videoOrCanvas: HTMLVideoElement | HTMLCanvasElement,
+    imageElement: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement,
     forcedTargetSpeciesName?: string
   ): Promise<ModelPrediction> {
     const startTime = performance.now();
 
-    // 1. Resize image to model input size (224x224)
+    // Ensure model and labels are loaded
+    if (!this.model) {
+      await this.initModel();
+    }
+
+    if (!this.model) {
+      throw new Error('Teachable Machine Keras model could not be loaded from converted_keras.');
+    }
+
+    // If developer/testing tool manually forced target species
+    if (forcedTargetSpeciesName) {
+      const manualMatch = INITIAL_SPECIES.find(
+        s => s.name.toLowerCase().includes(forcedTargetSpeciesName.toLowerCase()) ||
+             forcedTargetSpeciesName.toLowerCase().includes(s.name.toLowerCase())
+      ) || INITIAL_SPECIES[4];
+
+      const confidence = 0.94;
+      return {
+        species: manualMatch,
+        label: manualMatch.name,
+        confidence,
+        confidencePercent: 94,
+        allPredictions: [{ label: manualMatch.name, confidence }],
+        inputSize: { width: this.inputSize, height: this.inputSize },
+        inferenceTimeMs: Math.round(performance.now() - startTime)
+      };
+    }
+
+    // 1. Center crop and resize input to 224x224 canvas
     const canvas = document.createElement('canvas');
     canvas.width = this.inputSize;
     canvas.height = this.inputSize;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-
     if (!ctx) {
-      throw new Error('Could not get 2D rendering context for model input');
+      throw new Error('Canvas 2D context not available for model preprocessing');
     }
 
-    ctx.drawImage(videoOrCanvas, 0, 0, this.inputSize, this.inputSize);
-    const imgData = ctx.getImageData(0, 0, this.inputSize, this.inputSize);
-    const data = imgData.data; // RGBA 224x224
+    const srcW = 'videoWidth' in imageElement ? (imageElement.videoWidth || 640) : (imageElement.width || 640);
+    const srcH = 'videoHeight' in imageElement ? (imageElement.videoHeight || 480) : (imageElement.height || 480);
+    const minDim = Math.min(srcW, srcH);
+    const sx = (srcW - minDim) / 2;
+    const sy = (srcH - minDim) / 2;
 
-    // 2. Normalize pixels into [-1, 1] as expected by Teachable Machine MobileNet
-    // Normalized value = (pixel / 127.5) - 1
-    let rSum = 0, gSum = 0, bSum = 0;
-    let edgeEnergy = 0;
-    const totalPixels = this.inputSize * this.inputSize;
+    ctx.drawImage(imageElement, sx, sy, minDim, minDim, 0, 0, this.inputSize, this.inputSize);
 
-    for (let i = 0; i < data.length; i += 4) {
-      const rNorm = (data[i] / 127.5) - 1;
-      const gNorm = (data[i + 1] / 127.5) - 1;
-      const bNorm = (data[i + 2] / 127.5) - 1;
+    // 2. Preprocessing: convert to float32 tensor, expand dims, normalize: (pixel / 127.5) - 1.0
+    const rawTensor = tf.browser.fromPixels(canvas);
+    const floatTensor = rawTensor.toFloat();
+    const normalized = floatTensor.div(127.5).sub(1.0);
+    const batched = normalized.expandDims(0); // Shape: [1, 224, 224, 3]
 
-      rSum += rNorm;
-      gSum += gNorm;
-      bSum += bNorm;
+    // 3. Run Inference through Keras Model
+    const outputTensor = this.model.predict(batched) as tf.Tensor;
+    const probabilities = await outputTensor.data(); // Float32Array of class probabilities
 
-      // Sample gradient / edge energy to recognize animal silhouettes
-      if (i > 4) {
-        edgeEnergy += Math.abs(data[i] - data[i - 4]);
+    // Clean up GPU tensors
+    rawTensor.dispose();
+    floatTensor.dispose();
+    normalized.dispose();
+    batched.dispose();
+    outputTensor.dispose();
+
+    // 4. Find the class with the highest confidence
+    let topIndex = 0;
+    let highestConfidence = -1;
+    const allPredictions: { label: string; confidence: number }[] = [];
+
+    for (let i = 0; i < this.labels.length; i++) {
+      const prob = probabilities[i] !== undefined ? probabilities[i] : 0;
+      allPredictions.push({
+        label: this.labels[i],
+        confidence: parseFloat(prob.toFixed(4))
+      });
+      if (prob > highestConfidence) {
+        highestConfidence = prob;
+        topIndex = i;
       }
     }
 
-    const avgR = rSum / totalPixels;
-    const avgG = gSum / totalPixels;
-    const avgB = bSum / totalPixels;
+    const predictedLabel = this.labels[topIndex] || 'Wildlife Specimen';
+    const confidence = parseFloat(highestConfidence.toFixed(4));
+    const confidencePercent = Math.round(confidence * 100);
 
-    // 3. Compute class probability logits based on visual signature & model classes
-    // If a specific target is provided (e.g. testing specific wildlife from preview)
-    let topLabelIndex = 0;
-    let confidence = 0.88;
+    // 5. Match predicted label to EcoDex Species (by name/key, never by index)
+    const labelLower = predictedLabel.toLowerCase().trim();
+    const labelMap: Record<string, string> = {
+      // 5 trained animals from converted_keras
+      'cat': 'spec_4',           // Stray Cat (Felis catus)
+      'dog': 'spec_3',           // Stray Dog (Canis lupus familiaris)
+      'elephant': 'spec_14',     // Indian Elephant (Elephas maximus indicus)
+      'tiger': 'spec_15',        // Bengal Tiger (Panthera tigris tigris)
+      'lion': 'spec_20',         // Asiatic Lion (Panthera leo persica)
 
-    if (forcedTargetSpeciesName) {
-      const foundIdx = this.labels.findIndex(
-        l => l.toLowerCase().includes(forcedTargetSpeciesName.toLowerCase()) ||
-             forcedTargetSpeciesName.toLowerCase().includes(l.toLowerCase())
+      // Other wildlife in EcoDex
+      'crow': 'spec_0',          // House Crow
+      'pigeon': 'spec_1',        // Rock Pigeon
+      'squirrel': 'spec_2',      // Indian Palm Squirrel
+      'myna': 'spec_5',          // Common Myna
+      'sparrow': 'spec_6',       // House Sparrow
+      'turtle': 'spec_7',        // Turtle
+      'lizard': 'spec_8',        // Monitor Lizard
+      'peafowl': 'spec_9',       // Indian Peafowl
+      'peacock': 'spec_9',       // Indian Peafowl
+      'kingfisher': 'spec_10',   // White-throated Kingfisher
+      'roller': 'spec_11',       // Indian Roller
+      'deer': 'spec_12',         // Spotted Deer
+      'hare': 'spec_13',         // Indian Hare
+      'rabbit': 'spec_13',       // Indian Hare
+      'leopard': 'spec_16',      // Indian Leopard
+      'snow leopard': 'spec_17', // Snow Leopard
+      'red panda': 'spec_18',    // Red Panda
+      'bustard': 'spec_19'       // Great Indian Bustard
+    };
+
+    let matchedSpecies: Species | undefined;
+
+    // Direct mapped key
+    if (labelMap[labelLower]) {
+      matchedSpecies = INITIAL_SPECIES.find(s => s.id === labelMap[labelLower]);
+    }
+
+    // Name substring matching
+    if (!matchedSpecies) {
+      matchedSpecies = INITIAL_SPECIES.find(
+        s => s.name.toLowerCase().trim() === labelLower ||
+             s.name.toLowerCase().includes(labelLower) ||
+             labelLower.includes(s.name.toLowerCase())
       );
-      if (foundIdx !== -1) {
-        topLabelIndex = foundIdx;
-        // Realistic confidence generation: 86% to 96%
-        confidence = parseFloat((0.86 + Math.random() * 0.10).toFixed(3));
-      }
-    } else {
-      // Analyze chromatic and feature profile to determine class in labels.txt:
-      // Labels: 0 Crow, 1 Pigeon, 2 Squirrel, 3 Dog, 4 Cat, 5 Butterfly, 6 Frog,
-      // 7 Turtle, 8 Peacock, 9 Owl, 10 Parrot, 11 Deer, 12 Rabbit, 13 Fox, 14 Monkey,
-      // 15 Crocodile, 16 Cobra, 17 Wolf, 18 Tiger, 19 Leopard, 20 Elephant, 21 Lion, 22 Red Panda
-      if (avgG > avgR && avgG > avgB) {
-        // High green: Butterfly (5), Frog (6), Parrot (10)
-        const greenClasses = [5, 6, 10];
-        topLabelIndex = greenClasses[Math.floor(Math.random() * greenClasses.length)];
-        confidence = parseFloat((0.82 + Math.random() * 0.14).toFixed(3));
-      } else if (avgB > avgR && avgB > -0.1) {
-        // Blueish accents: Peacock (8), Black Turtle (7), Pigeon (1)
-        const blueClasses = [8, 7, 1];
-        topLabelIndex = blueClasses[Math.floor(Math.random() * blueClasses.length)];
-        confidence = parseFloat((0.84 + Math.random() * 0.12).toFixed(3));
-      } else if (avgR > avgG && avgR > 0.1) {
-        // Warm orange/red: Tiger (18), Red Panda (22), Bengal Fox (13)
-        const warmClasses = [18, 22, 13];
-        topLabelIndex = warmClasses[Math.floor(Math.random() * warmClasses.length)];
-        confidence = parseFloat((0.87 + Math.random() * 0.11).toFixed(3));
-      } else {
-        // Neutral / Earthy: Squirrel (2), Crow (0), Dog (3), Cat (4), Deer (11), Elephant (20)
-        const neutralClasses = [2, 0, 3, 4, 11, 12, 14, 20];
-        topLabelIndex = neutralClasses[Math.floor(Math.random() * neutralClasses.length)];
-        confidence = parseFloat((0.76 + Math.random() * 0.18).toFixed(3));
-      }
     }
 
-    const predictedLabel = this.labels[topLabelIndex] || this.labels[2] || 'Indian Palm Squirrel';
+    if (!matchedSpecies) {
+      matchedSpecies = {
+        id: `spec_keras_${topIndex}`,
+        labelIndex: topIndex,
+        name: predictedLabel,
+        scientificName: `${predictedLabel} sp.`,
+        category: 'Mammal',
+        rarity: 'Common',
+        xp: 30,
+        habitat: 'Natural Habitats & Urban Parks',
+        diet: 'Natural Diet',
+        conservationStatus: 'Least Concern',
+        description: `Biological specimen identified directly by trained Keras model (${predictedLabel}).`,
+        funFact: `Verified classification output from Teachable Machine Keras model.`,
+        wildlifeFacts: [`Identified with ${confidencePercent}% match confidence.`],
+        icon: '🐾',
+        image: 'https://images.unsplash.com/photo-1548681528-6a5c45b66b42?auto=format&fit=crop&w=800&q=80',
+        discovered: false,
+        firstDiscoveredDate: 'Undiscovered',
+        discoveryLocation: 'Bio-Reserve Field',
+        totalSightings: 0
+      };
+    }
 
-    // Map label to EcoDex Species
-    const speciesMatch = INITIAL_SPECIES.find(
-      s => s.name.toLowerCase().includes(predictedLabel.toLowerCase()) ||
-           predictedLabel.toLowerCase().includes(s.name.toLowerCase()) ||
-           s.labelIndex === topLabelIndex
-    ) || INITIAL_SPECIES[2];
-
-    const inferenceTimeMs = Math.round(performance.now() - startTime + 120);
-
-    // Build probability distribution
-    const allPredictions = this.labels.map((lbl, idx) => ({
-      label: lbl,
-      confidence: idx === topLabelIndex ? confidence : parseFloat(((1 - confidence) / (this.labels.length - 1)).toFixed(4))
-    }));
+    const inferenceTimeMs = Math.round(performance.now() - startTime);
 
     return {
-      species: speciesMatch,
+      species: matchedSpecies,
       label: predictedLabel,
       confidence,
-      confidencePercent: Math.round(confidence * 100),
+      confidencePercent,
       allPredictions,
       inputSize: { width: this.inputSize, height: this.inputSize },
       inferenceTimeMs
@@ -255,8 +383,6 @@ export class AIModelService {
     }
 
     // 3. Screenshot / Injection Heuristic Check
-    // A live optical sensor always produces slight luminance variance and noise,
-    // whereas pure digital screenshots have flat color banding or exact system UI overlays.
     const ctx = canvas.getContext('2d');
     let hasSensorNoise = true;
     if (ctx && canvas.width > 10 && canvas.height > 10) {
@@ -268,7 +394,6 @@ export class AIModelService {
         }
       }
       if (identicalPixels > 24) {
-        // Uniform color block detected, likely a flat digital image
         hasSensorNoise = false;
       }
     }

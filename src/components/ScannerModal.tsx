@@ -8,16 +8,13 @@ import {
   ShieldAlert, 
   ShieldCheck, 
   MapPin, 
-  Clock, 
   AlertTriangle, 
-  HelpCircle,
-  Award,
-  Zap
+  BookOpen
 } from 'lucide-react';
 import { useEcoDex } from '../context/EcoDexContext';
 import { aiModelService, ModelPrediction, AntiCheatRecord } from '../services/aiModelService';
 import { audio } from '../services/audioService';
-import { INITIAL_SPECIES } from '../data/speciesData';
+import { compressCanvasToThumbnail } from '../services/safeStorage';
 
 interface ScannerModalProps {
   isOpen: boolean;
@@ -25,10 +22,9 @@ interface ScannerModalProps {
 }
 
 export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) => {
-  const { recordDiscovery, user } = useEcoDex();
+  const { recordDiscovery } = useEcoDex();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   // States
@@ -39,13 +35,12 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
   const [prediction, setPrediction] = useState<ModelPrediction | null>(null);
   const [antiCheat, setAntiCheat] = useState<AntiCheatRecord | null>(null);
   const [antiCheatError, setAntiCheatError] = useState<string | null>(null);
+  const [isSavedToEcoDex, setIsSavedToEcoDex] = useState(false);
 
   // Model status
   const [modelReady, setModelReady] = useState(false);
-  // Live target simulator for test flexibility on PC
-  const [testSpeciesLens, setTestSpeciesLens] = useState<string>('');
 
-  // 1. Initialize Live Camera Preview on open
+  // 1. Initialize Model & Live Camera Preview on open
   useEffect(() => {
     if (!isOpen) {
       stopCamera();
@@ -53,7 +48,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
       return;
     }
 
-    aiModelService.initModel().then(() => setModelReady(true));
+    aiModelService.initModel().then((loaded) => setModelReady(loaded));
     startLiveCamera();
 
     return () => {
@@ -67,6 +62,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
     setAntiCheat(null);
     setAntiCheatError(null);
     setIsProcessing(false);
+    setIsSavedToEcoDex(false);
   };
 
   const startLiveCamera = async () => {
@@ -88,8 +84,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
       }
       setCameraActive(true);
     } catch (err: unknown) {
-      const error = err as { name?: string; message?: string };
-      console.warn('Camera stream error:', error);
+      console.warn('Camera stream error:', err);
       setCameraError('Camera access required. Please allow camera permissions for live wildlife verification.');
       setCameraActive(false);
     }
@@ -110,6 +105,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
     audio.playRadarPing();
     setIsProcessing(true);
     setAntiCheatError(null);
+    setIsSavedToEcoDex(false);
 
     const video = videoRef.current;
     const canvas = document.createElement('canvas');
@@ -124,8 +120,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
 
     // Capture the frame directly from live camera feed
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-    setCapturedImage(dataUrl);
+    const compactPhotoUrl = compressCanvasToThumbnail(canvas, 360, 0.65) || canvas.toDataURL('image/jpeg', 0.5);
+    setCapturedImage(compactPhotoUrl);
 
     // 3. Anti-Cheat Verification (Camera live, GPS active, Timestamp, anti-screenshot)
     const antiCheatResult = await aiModelService.verifyAntiCheat(streamRef.current, canvas);
@@ -138,13 +134,24 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
       return;
     }
 
-    // 4. Run AI Model Prediction
+    // 4. Run Inference directly through the trained Keras model
     try {
-      const pred = await aiModelService.predict(canvas, testSpeciesLens || undefined);
+      const pred = await aiModelService.predict(canvas);
       setPrediction(pred);
       audio.playScanSuccess();
+
+      // Requirement 7: If confidence is >= 85%, save that animal to user's EcoDex profile in Firebase/Firestore
+      if (pred.confidence >= 0.85) {
+        recordDiscovery(
+          pred.species.id,
+          compactPhotoUrl,
+          pred.confidence,
+          antiCheatResult.coordinates
+        );
+        setIsSavedToEcoDex(true);
+      }
     } catch (e) {
-      console.error('Prediction failed:', e);
+      console.error('Keras model prediction failed:', e);
       setAntiCheatError('Model inference error. Please try scanning again.');
     } finally {
       setIsProcessing(false);
@@ -160,20 +167,18 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
     }
   };
 
-  // 6. Add to EcoDex
-  const handleAddToEcoDex = (confirmedLabel?: string) => {
+  // 6. Manual Add to EcoDex (for confidence between 70% and 84%)
+  const handleManualAddToEcoDex = () => {
     if (!prediction) return;
-    const targetSpecies = confirmedLabel 
-      ? INITIAL_SPECIES.find(s => s.name.toLowerCase().includes(confirmedLabel.toLowerCase())) || prediction.species
-      : prediction.species;
 
     recordDiscovery(
-      targetSpecies.id, 
-      capturedImage || targetSpecies.image, 
+      prediction.species.id, 
+      capturedImage || prediction.species.image, 
       prediction.confidence,
       antiCheat?.coordinates
     );
-    onClose();
+    setIsSavedToEcoDex(true);
+    setTimeout(() => onClose(), 800);
   };
 
   if (!isOpen) return null;
@@ -194,7 +199,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-fadeIn">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-fadeIn">
       <div className="relative w-full max-w-md bg-slate-950 text-white rounded-card-lg border border-leaf/40 shadow-2xl overflow-hidden flex flex-col max-h-[94vh]">
         {/* Header Bar */}
         <div className="flex items-center justify-between px-4 py-3 bg-slate-900/90 border-b border-white/10">
@@ -210,8 +215,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
 
           {/* Model Status Pill */}
           <div className="flex items-center gap-1.5 bg-white/10 px-2.5 py-0.5 rounded-full text-[10px] text-slate-300 font-mono">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-            <span>keras_model.h5 (23 Classes)</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span>Teachable Machine 5 Animals ({modelReady ? 'Ready' : 'Loading...'})</span>
           </div>
 
           <button
@@ -249,7 +254,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
               <p className="text-xs text-slate-300 mb-4 max-w-xs">{cameraError}</p>
               <button
                 onClick={startLiveCamera}
-                className="px-4 py-2 rounded-xl bg-forest hover:bg-forest-light text-white font-bold text-xs shadow-nature"
+                className="px-4 py-2 rounded-xl bg-forest hover:bg-forest-light text-white font-bold text-xs shadow-nature cursor-pointer"
               >
                 Retry Camera Access
               </button>
@@ -287,25 +292,6 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
               GPS Locked: 18.5204° N
             </span>
           </div>
-
-          {/* Target Specimen Lens (for desktop evaluation / prompt simulation) */}
-          {!capturedImage && (
-            <div className="absolute top-3 right-3 z-20">
-              <select
-                value={testSpeciesLens}
-                onChange={e => setTestSpeciesLens(e.target.value)}
-                className="bg-black/70 text-slate-200 border border-white/20 text-[10px] rounded-lg px-2 py-1 font-mono focus:outline-none"
-                title="Target Species Lens (Simulate specific wildlife target)"
-              >
-                <option value="">🎯 Optical Auto-Detect</option>
-                {INITIAL_SPECIES.map(s => (
-                  <option key={s.id} value={s.name}>
-                    {s.icon} {s.name} ({s.rarity})
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
         </div>
 
         {/* Anti-Cheat Rejection Error Banner */}
@@ -331,7 +317,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="text-base font-extrabold text-white">
-                      {prediction.species.name}
+                      {prediction.label}
                     </h3>
                     <span className={`text-[9px] px-2 py-0.5 rounded-full uppercase border ${getRarityBadgeColor(prediction.species.rarity)}`}>
                       {prediction.species.rarity}
@@ -357,32 +343,48 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
               </div>
             </div>
 
+            {/* Auto-Saved Notification for >= 85% */}
+            {isSavedToEcoDex && (
+              <div className="p-2.5 rounded-xl bg-emerald-950/80 border border-emerald-500/50 text-emerald-200 text-xs flex items-center justify-between animate-fadeIn">
+                <div className="flex items-center gap-2">
+                  <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                  <div>
+                    <span className="font-bold text-white">Saved to EcoDex Profile</span>
+                    <p className="text-[10px] text-emerald-300">
+                      High confidence ({prediction.confidencePercent}% ≥ 85%) logged to Firebase
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[9px] bg-emerald-500/20 px-2 py-0.5 rounded font-mono text-emerald-300">
+                  Synced ☁️
+                </span>
+              </div>
+            )}
+
             {/* Confidence Feedback Rules */}
-            {/* Rule 1: Confidence is between 70% and 85% */}
-            {isMediumConfidence && (
+            {isMediumConfidence && !isSavedToEcoDex && (
               <div className="p-3 rounded-xl bg-amber-500/15 border border-amber-400/40 text-amber-200 text-xs flex items-center gap-2.5">
-                <HelpCircle className="w-5 h-5 text-amber-400 flex-shrink-0" />
+                <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" />
                 <div className="flex-1">
                   <span className="font-bold text-white">
-                    "This looks like a {prediction.species.name}. Confirm?"
+                    Confirm Specimen: {prediction.label}
                   </span>
                   <p className="text-[10px] text-amber-300 mt-0.5">
-                    Confidence is {prediction.confidencePercent}%. Please verify this specimen.
+                    Confidence is {prediction.confidencePercent}%. Tap "Confirm & Add" to log to EcoDex.
                   </p>
                 </div>
               </div>
             )}
 
-            {/* Rule 2: Confidence is below 70% */}
             {isLowConfidence && (
               <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-400/40 text-rose-200 text-xs flex items-center gap-2.5">
                 <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0" />
                 <div className="flex-1">
                   <span className="font-bold text-white">
-                    Low Confidence ({prediction.confidencePercent}%)
+                    Low Confidence ({prediction.confidencePercent}% &lt; 85%)
                   </span>
                   <p className="text-[10px] text-rose-300 mt-0.5">
-                    Please capture another image closer to the wildlife in good lighting.
+                    Not saved automatically. Please capture another photo closer to the specimen in good lighting.
                   </p>
                 </div>
               </div>
@@ -410,36 +412,29 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
                 Scan Again
               </button>
 
-              {/* Rule: Only enable "Add to EcoDex" if confidence is above 85% */}
-              {isHighConfidence && (
+              {isSavedToEcoDex ? (
                 <button
-                  onClick={() => handleAddToEcoDex()}
+                  onClick={onClose}
                   className="flex-1 py-3 px-4 rounded-xl bg-forest hover:bg-forest-light text-white font-bold text-xs shadow-nature-glow flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                 >
-                  <Check className="w-4 h-4 text-golden" />
-                  Add to EcoDex (+{prediction.species.xp} XP)
+                  <BookOpen className="w-4 h-4 text-golden" />
+                  View in EcoDex
                 </button>
-              )}
-
-              {/* For 70% to 85%: "Confirm & Add" */}
-              {isMediumConfidence && (
+              ) : isMediumConfidence ? (
                 <button
-                  onClick={() => handleAddToEcoDex(prediction.species.name)}
+                  onClick={handleManualAddToEcoDex}
                   className="flex-1 py-3 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow-nature flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                 >
                   <Check className="w-4 h-4" />
-                  Yes, Confirm & Add
+                  Confirm & Add (+{prediction.species.xp} XP)
                 </button>
-              )}
-
-              {/* Below 70%: Add to EcoDex disabled */}
-              {isLowConfidence && (
+              ) : (
                 <button
                   disabled
                   className="flex-1 py-3 px-4 rounded-xl bg-slate-800 text-slate-500 font-bold text-xs flex items-center justify-center gap-1.5 cursor-not-allowed border border-white/5 opacity-60"
-                  title="Confidence below 70%. Please capture another image."
+                  title="Confidence below 85% threshold."
                 >
-                  Add to EcoDex (Min 70%)
+                  Min 85% Required
                 </button>
               )}
             </div>
@@ -472,10 +467,10 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
 
             <div className="mt-2 text-center">
               <span className="text-xs font-bold text-slate-300">
-                {isProcessing ? 'Analyzing Model Weights (224x224)...' : 'Tap to Capture Live Wildlife Photo'}
+                {isProcessing ? 'Running Keras Model (224x224)...' : 'Tap to Capture Live Wildlife Photo'}
               </span>
               <p className="text-[10px] text-slate-500 mt-0.5">
-                🔒 Live Camera & GPS Verification • Gallery uploads disabled
+                Teachable Machine Model • Cat, Dog, Elephant, Tiger, Lion
               </p>
             </div>
           </div>
