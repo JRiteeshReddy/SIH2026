@@ -236,29 +236,32 @@ export class AIModelService {
     // 5. Match predicted label to EcoDex Species (by name/key, never by index)
     const labelLower = predictedLabel.toLowerCase().trim();
     const labelMap: Record<string, string> = {
-      'cat': 'spec_4',        // Stray Cat (Felis catus)
-      'dog': 'spec_3',        // Stray Dog (Canis lupus familiaris)
-      'elephant': 'spec_20',  // Asian Elephant (Elephas maximus indicus)
-      'tiger': 'spec_18',     // Bengal Tiger (Panthera tigris tigris)
-      'lion': 'spec_21',      // Asiatic Lion (Panthera leo persica)
-      'crow': 'spec_0',       // House Crow
-      'pigeon': 'spec_1',     // Rock Pigeon
-      'squirrel': 'spec_2',   // Indian Palm Squirrel
-      'butterfly': 'spec_6',
-      'frog': 'spec_23',
-      'turtle': 'spec_7',
-      'peacock': 'spec_8',
-      'owl': 'spec_9',
-      'parrot': 'spec_5',
-      'deer': 'spec_11',
-      'rabbit': 'spec_12',
-      'fox': 'spec_13',
-      'monkey': 'spec_14',
-      'crocodile': 'spec_15',
-      'cobra': 'spec_16',
-      'wolf': 'spec_17',
-      'leopard': 'spec_19',
-      'red panda': 'spec_22'
+      // 5 trained animals from converted_keras
+      'cat': 'spec_4',           // Stray Cat (Felis catus)
+      'dog': 'spec_3',           // Stray Dog (Canis lupus familiaris)
+      'elephant': 'spec_14',     // Indian Elephant (Elephas maximus indicus)
+      'tiger': 'spec_15',        // Bengal Tiger (Panthera tigris tigris)
+      'lion': 'spec_20',         // Asiatic Lion (Panthera leo persica)
+
+      // Other wildlife in EcoDex
+      'crow': 'spec_0',          // House Crow
+      'pigeon': 'spec_1',        // Rock Pigeon
+      'squirrel': 'spec_2',      // Indian Palm Squirrel
+      'myna': 'spec_5',          // Common Myna
+      'sparrow': 'spec_6',       // House Sparrow
+      'turtle': 'spec_7',        // Turtle
+      'lizard': 'spec_8',        // Monitor Lizard
+      'peafowl': 'spec_9',       // Indian Peafowl
+      'peacock': 'spec_9',       // Indian Peafowl
+      'kingfisher': 'spec_10',   // White-throated Kingfisher
+      'roller': 'spec_11',       // Indian Roller
+      'deer': 'spec_12',         // Spotted Deer
+      'hare': 'spec_13',         // Indian Hare
+      'rabbit': 'spec_13',       // Indian Hare
+      'leopard': 'spec_16',      // Indian Leopard
+      'snow leopard': 'spec_17', // Snow Leopard
+      'red panda': 'spec_18',    // Red Panda
+      'bustard': 'spec_19'       // Great Indian Bustard
     };
 
     let matchedSpecies: Species | undefined;

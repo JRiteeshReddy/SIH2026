@@ -563,6 +563,32 @@ export const INITIAL_SPECIES: Species[] = [
     discoveryLocation: 'Desert National Park Sanctuary, Jaisalmer',
     discoveryCoordinates: { lat: 26.9157, lng: 70.9083 },
     totalSightings: 0
+  },
+  {
+    id: 'spec_20',
+    labelIndex: 20,
+    name: 'Asiatic Lion',
+    scientificName: 'Panthera leo persica',
+    category: 'Mammal',
+    rarity: 'Legendary',
+    xp: 500,
+    habitat: 'Dry deciduous forests, teak savannas, thorn scrublands',
+    diet: 'Carnivore (chital, sambar, nilgai, wild boar)',
+    conservationStatus: 'Endangered',
+    description: 'Majestic king of the wilderness with a distinct longitudinal fold of skin along its belly and a darker, sparser mane than its African cousin.',
+    funFact: 'The Gir National Park sanctuary in Gujarat is the only remaining natural habitat of the Asiatic Lion in the entire world.',
+    wildlifeFacts: [
+      'Males possess a distinctive longitudinal fold of skin running along their belly.',
+      'Lives in prides where females are more solitary and separate from adult males.',
+      'World population has rebounded from under 20 lions to over 600 through conservation.'
+    ],
+    icon: '🦁',
+    image: 'https://images.unsplash.com/photo-1546182990-dffeafbe841d?auto=format&fit=crop&w=800&q=80',
+    discovered: false,
+    firstDiscoveredDate: 'Undiscovered',
+    discoveryLocation: 'Gir National Park Sanctuary, Gujarat',
+    discoveryCoordinates: { lat: 21.1241, lng: 70.8242 },
+    totalSightings: 0
   }
 ];
 

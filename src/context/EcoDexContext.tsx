@@ -718,7 +718,7 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const avianCount = updatedSpecies.filter(s => s.discovered && s.category === 'Avian').length;
     const mammalCount = updatedSpecies.filter(s => s.discovered && s.category === 'Mammal').length;
-    const hasApex = updatedSpecies.some(s => s.discovered && ['Tiger', 'Lion', 'Leopard'].includes(s.name));
+    const hasApex = updatedSpecies.some(s => s.discovered && ['tiger', 'lion', 'leopard'].some(apex => s.name.toLowerCase().includes(apex)));
 
     const { updatedBadges, newlyUnlocked } = evaluateAllBadges(achievements, {
       discoveredSpeciesCount: newSpeciesCount,
