@@ -569,7 +569,12 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     confidence: number = 0.96,
     coords?: { lat: number; lng: number }
   ) => {
-    const target = species.find(s => s.id === speciesId || s.name.toLowerCase() === speciesId.toLowerCase());
+    const idLower = speciesId.toLowerCase().trim();
+    const target = species.find(s => 
+      s.id === speciesId || 
+      s.name.toLowerCase() === idLower ||
+      s.name.toLowerCase().includes(idLower)
+    );
     if (!target || !user) {
       return { 
         isNew: false, 
