@@ -25,6 +25,7 @@ import {
   Firestore
 } from 'firebase/firestore';
 import { UserProfile, Expedition, DiscoveryRecord, LeaderboardUser, ConservationReport } from '../types';
+import { safeStorageSet } from './safeStorage';
 
 // Read Firebase Web SDK Configuration strictly from Vite Environment Variables
 const firebaseConfig = {
@@ -123,7 +124,7 @@ export const loginWithGoogle = async (): Promise<FirebaseUser> => {
     email: 'nature.ranger@ecodex.org',
     displayName: 'Nature Ranger'
   } as unknown as FirebaseUser;
-  localStorage.setItem('ecodex_active_uid', mockUser.uid);
+  safeStorageSet('ecodex_active_uid', mockUser.uid);
   return mockUser;
 };
 
@@ -143,7 +144,7 @@ export const loginWithEmail = async (email: string, pass: string): Promise<Fireb
     email,
     displayName: email.split('@')[0]
   } as unknown as FirebaseUser;
-  localStorage.setItem('ecodex_active_uid', mockUser.uid);
+  safeStorageSet('ecodex_active_uid', mockUser.uid);
   return mockUser;
 };
 
@@ -161,7 +162,7 @@ export const registerWithEmail = async (email: string, pass: string): Promise<Fi
     email,
     displayName: email.split('@')[0]
   } as unknown as FirebaseUser;
-  localStorage.setItem('ecodex_active_uid', mockUser.uid);
+  safeStorageSet('ecodex_active_uid', mockUser.uid);
   return mockUser;
 };
 
@@ -237,7 +238,7 @@ const getPendingItems = <T>(key: string): T[] => {
 };
 
 const setPendingItems = <T>(key: string, items: T[]) => {
-  localStorage.setItem(key, JSON.stringify(items));
+  safeStorageSet(key, JSON.stringify(items));
 };
 
 export const getPendingSyncCount = (): number => {
@@ -257,8 +258,8 @@ export const saveUserProfileToFirestore = async (profile: UserProfile): Promise<
   };
 
   // Cache locally
-  localStorage.setItem(`ecodex_user_${profile.uid}`, JSON.stringify(payload));
-  localStorage.setItem('ecodex_active_uid', profile.uid);
+  safeStorageSet(`ecodex_user_${profile.uid}`, JSON.stringify(payload));
+  safeStorageSet('ecodex_active_uid', profile.uid);
 
   if (navigator.onLine && db && auth?.currentUser) {
     try {
@@ -281,12 +282,12 @@ export const saveUserProfileToFirestore = async (profile: UserProfile): Promise<
         return true;
       } catch (err) {
         console.warn('Fallback profile save failed, queueing offline:', err);
-        localStorage.setItem(PENDING_PROFILE_KEY, JSON.stringify(payload));
+        safeStorageSet(PENDING_PROFILE_KEY, JSON.stringify(payload));
         return false;
       }
     }
   } else {
-    localStorage.setItem(PENDING_PROFILE_KEY, JSON.stringify(payload));
+    safeStorageSet(PENDING_PROFILE_KEY, JSON.stringify(payload));
     return false;
   }
 };
@@ -306,7 +307,7 @@ export const fetchUserProfileResult = async (uid: string): Promise<FetchProfileR
       const snap = await getDoc(doc(db, 'users', uid));
       if (snap.exists()) {
         const data = snap.data() as UserProfile;
-        localStorage.setItem(`ecodex_user_${uid}`, JSON.stringify(data));
+        safeStorageSet(`ecodex_user_${uid}`, JSON.stringify(data));
         return { status: 'exists', profile: data };
       } else {
         return { status: 'missing', profile: null };
@@ -395,7 +396,7 @@ export const logExpeditionToFirestore = async (expedition: Expedition): Promise<
   // Always cache locally in device history
   const history = getLocalExpeditions();
   history.unshift(payload);
-  localStorage.setItem('ecodex_expedition_history', JSON.stringify(history.slice(0, 50)));
+  safeStorageSet('ecodex_expedition_history', JSON.stringify(history.slice(0, 50)));
 
   if (navigator.onLine && db && auth?.currentUser) {
     try {
@@ -450,10 +451,17 @@ export const logDiscoveryToFirestore = async (discovery: DiscoveryRecord): Promi
     locationName: discovery.locationName || 'Nature Sanctuary'
   };
 
-  // Always cache locally in device history
+  // Always cache locally in device history with safe payload sizing
   const history = getLocalDiscoveries();
-  history.unshift(payload);
-  localStorage.setItem('ecodex_discovery_history', JSON.stringify(history.slice(0, 50)));
+  const cachedItem = { ...payload };
+  if (cachedItem.photoUrl && cachedItem.photoUrl.length > 30000) {
+    cachedItem.photoUrl = '';
+  }
+  if (cachedItem.localImageUri && cachedItem.localImageUri.length > 30000) {
+    cachedItem.localImageUri = '';
+  }
+  history.unshift(cachedItem);
+  safeStorageSet('ecodex_discovery_history', JSON.stringify(history.slice(0, 50)));
 
   // Do NOT upload base64 or images to Firebase Storage (staying on Spark plan)
   if (navigator.onLine && db && auth?.currentUser) {

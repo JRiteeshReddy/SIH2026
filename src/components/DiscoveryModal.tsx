@@ -10,23 +10,25 @@ export const DiscoveryModal: React.FC = () => {
   const [showRumble, setShowRumble] = useState(false);
 
   useEffect(() => {
-    if (!activeDiscoveryModal) {
+    if (!activeDiscoveryModal || !activeDiscoveryModal.species) {
       setIsFlipped(false);
       setShowRumble(false);
       return;
     }
 
     const { species } = activeDiscoveryModal;
-    const isLegendary = species.rarity === 'Legendary';
+    const isLegendary = species?.rarity === 'Legendary';
+    let legendaryInterval: ReturnType<typeof setInterval> | null = null;
 
     if (isLegendary) {
       setShowRumble(true);
       audio.playLegendaryEncounter();
       // Massive golden confetti barrage for Legendary
       const end = Date.now() + 2500;
-      const interval: ReturnType<typeof setInterval> = setInterval(() => {
+      legendaryInterval = setInterval(() => {
         if (Date.now() > end) {
-          return clearInterval(interval);
+          if (legendaryInterval) clearInterval(legendaryInterval);
+          return;
         }
         confetti({
           startVelocity: 30,
@@ -57,17 +59,18 @@ export const DiscoveryModal: React.FC = () => {
     }, 700);
 
     return () => {
+      if (legendaryInterval) clearInterval(legendaryInterval);
       clearTimeout(flipTimer);
       clearTimeout(rumbleTimer);
     };
   }, [activeDiscoveryModal?.species?.id]);
 
-  if (!activeDiscoveryModal) return null;
+  if (!activeDiscoveryModal || !activeDiscoveryModal.species) return null;
 
-  const { species, xpAwarded, isNew, breakdown } = activeDiscoveryModal;
-  const isLegendary = species.rarity === 'Legendary';
+  const { species, xpAwarded = 20, isNew = false, breakdown } = activeDiscoveryModal;
+  const isLegendary = species?.rarity === 'Legendary';
 
-  const getRarityBadgeColor = (rarity: string) => {
+  const getRarityBadgeColor = (rarity?: string) => {
     switch (rarity) {
       case 'Legendary': return 'bg-amber-400 text-amber-950 shadow-gold-glow';
       case 'Epic': return 'bg-purple-400 text-purple-950';
@@ -176,8 +179,8 @@ export const DiscoveryModal: React.FC = () => {
             {/* Banner image with overlay */}
             <div className="relative h-48 w-full overflow-hidden bg-slate-950 flex-shrink-0">
               <img
-                src={species.discoveryPhoto || species.image}
-                alt={species.name}
+                src={species?.discoveryPhoto || species?.image || 'https://images.unsplash.com/photo-1546182990-dffeafbe841d?auto=format&fit=crop&w=600&q=80'}
+                alt={species?.name || 'Wildlife'}
                 className="w-full h-full object-cover transform hover:scale-105 transition-transform duration-500"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent"></div>
@@ -192,11 +195,11 @@ export const DiscoveryModal: React.FC = () => {
 
               {/* Rarity & Category Badges */}
               <div className="absolute top-3 left-3 flex gap-1.5">
-                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${getRarityBadgeColor(species.rarity)}`}>
-                  {species.rarity}
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${getRarityBadgeColor(species?.rarity)}`}>
+                  {species?.rarity || 'Common'}
                 </span>
                 <span className="px-2.5 py-0.5 rounded-full bg-white/20 text-white text-[10px] font-bold uppercase tracking-wider backdrop-blur-sm">
-                  {species.category}
+                  {species?.category || 'Wildlife'}
                 </span>
               </div>
 
@@ -207,10 +210,10 @@ export const DiscoveryModal: React.FC = () => {
                   <span>{isNew ? 'New Field Discovery!' : 'Specimen Re-Encountered'}</span>
                 </div>
                 <h3 className="text-2xl font-black tracking-tight leading-none flex items-center gap-2">
-                  <span>{species.name}</span>
+                  <span>{species?.name || 'Nature Discovery'}</span>
                   {isLegendary && <span className="text-lg">👑</span>}
                 </h3>
-                <p className="text-xs italic text-slate-300 font-serif mt-0.5">{species.scientificName}</p>
+                <p className="text-xs italic text-slate-300 font-serif mt-0.5">{species?.scientificName || 'Fauna'}</p>
               </div>
             </div>
 
@@ -235,14 +238,14 @@ export const DiscoveryModal: React.FC = () => {
                 </div>
 
                 {/* Itemized Bonuses */}
-                {breakdown ? (
+                {breakdown && Array.isArray(breakdown.bonuses) && breakdown.bonuses.length > 0 ? (
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between text-[11px] opacity-80">
                       <span className="flex items-center gap-1">
                         <span>🏷️</span>
-                        <span>Base {species.rarity} Reward</span>
+                        <span>Base {species?.rarity || 'Common'} Reward</span>
                       </span>
-                      <span className="font-bold">+{breakdown.baseXP} XP</span>
+                      <span className="font-bold">+{breakdown?.baseXP ?? 20} XP</span>
                     </div>
 
                     {breakdown.bonuses.map((bonus, i) => (
@@ -255,10 +258,10 @@ export const DiscoveryModal: React.FC = () => {
                         }`}
                       >
                         <span className="flex items-center gap-1 truncate">
-                          <span>{bonus.icon}</span>
-                          <span className="truncate">{bonus.label}</span>
+                          <span>{bonus?.icon || '⭐'}</span>
+                          <span className="truncate">{bonus?.label || 'Bonus'}</span>
                         </span>
-                        <span className="font-extrabold flex-shrink-0">+{bonus.xp} XP</span>
+                        <span className="font-extrabold flex-shrink-0">+{bonus?.xp ?? 0} XP</span>
                       </div>
                     ))}
                   </div>
@@ -273,7 +276,7 @@ export const DiscoveryModal: React.FC = () => {
               {/* Description & Wildlife Fact */}
               <div className="space-y-1.5">
                 <p className="text-xs leading-relaxed opacity-90">
-                  {species.description}
+                  {species?.description || 'A remarkable wildlife specimen recorded in your field journal.'}
                 </p>
 
                 <div className={`rounded-xl p-2.5 border text-xs ${
@@ -282,7 +285,7 @@ export const DiscoveryModal: React.FC = () => {
                     : 'bg-leaf-pale/60 border-leaf/20 text-forest-deep'
                 }`}>
                   <span className="font-bold text-golden">🌿 Field Fact: </span>
-                  {species.funFact}
+                  {species?.funFact || 'Observed and documented during nature exploration.'}
                 </div>
               </div>
 

@@ -31,6 +31,7 @@ import {
   subscribeToAuthState,
   logoutUser
 } from '../services/firebase';
+import { safeStorageSet } from '../services/safeStorage';
 import { 
   calculateExplorerLevel, 
   calculateEcoXPAward, 
@@ -221,21 +222,21 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Sync user state to local storage & Firestore
   useEffect(() => {
     if (user) {
-      localStorage.setItem('ecodex_current_user', JSON.stringify(user));
+      safeStorageSet('ecodex_current_user', JSON.stringify(user));
       saveUserProfileToFirestore(user);
     }
   }, [user]);
 
   useEffect(() => {
-    localStorage.setItem('ecodex_species_catalog', JSON.stringify(species));
+    safeStorageSet('ecodex_species_catalog', JSON.stringify(species));
   }, [species]);
 
   useEffect(() => {
-    localStorage.setItem('ecodex_achievements_v2', JSON.stringify(achievements));
+    safeStorageSet('ecodex_achievements_v2', JSON.stringify(achievements));
   }, [achievements]);
 
   useEffect(() => {
-    localStorage.setItem('ecodex_daily_challenges', JSON.stringify(dailyChallenges));
+    safeStorageSet('ecodex_daily_challenges', JSON.stringify(dailyChallenges));
   }, [dailyChallenges]);
 
   const setActiveTab = (tab: 'home' | 'expedition' | 'ecodex' | 'leaderboard' | 'profile') => {
@@ -600,14 +601,14 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const lastDiscDate = localStorage.getItem('ecodex_last_discovery_date');
     const isFirstDiscoveryOfDay = lastDiscDate !== today;
     if (isNew) {
-      localStorage.setItem('ecodex_last_discovery_date', today);
+      safeStorageSet('ecodex_last_discovery_date', today);
     }
 
     const locationName = target.discoveryLocation || user.cityState || 'Field Nature Reserve';
     const visitedLocations = JSON.parse(localStorage.getItem('ecodex_visited_locations') || '[]') as string[];
     const isNewLocation = !visitedLocations.includes(locationName);
     if (isNewLocation && isNew) {
-      localStorage.setItem('ecodex_visited_locations', JSON.stringify([...visitedLocations, locationName]));
+      safeStorageSet('ecodex_visited_locations', JSON.stringify([...visitedLocations, locationName]));
     }
 
     const breakdown = calculateEcoXPAward({
@@ -691,8 +692,13 @@ export const EcoDexProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     logDiscoveryToFirestore(record);
 
     audio.playDiscovery();
+    const modalSpecimen: Species = {
+      ...target,
+      discovered: true,
+      discoveryPhoto: photoUrl || target.discoveryPhoto || target.image
+    };
     setActiveDiscoveryModal({
-      species: target,
+      species: modalSpecimen,
       xpAwarded,
       isNew,
       breakdown

@@ -187,11 +187,15 @@ const AppContent: React.FC = () => {
   );
 };
 
+import { ErrorBoundary } from './components/ErrorBoundary';
+
 export const App: React.FC = () => {
   return (
-    <EcoDexProvider>
-      <AppContent />
-    </EcoDexProvider>
+    <ErrorBoundary>
+      <EcoDexProvider>
+        <AppContent />
+      </EcoDexProvider>
+    </ErrorBoundary>
   );
 };
 

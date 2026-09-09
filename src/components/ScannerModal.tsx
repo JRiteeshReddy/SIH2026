@@ -14,6 +14,7 @@ import {
 import { useEcoDex } from '../context/EcoDexContext';
 import { aiModelService, ModelPrediction, AntiCheatRecord } from '../services/aiModelService';
 import { audio } from '../services/audioService';
+import { compressCanvasToThumbnail } from '../services/safeStorage';
 
 interface ScannerModalProps {
   isOpen: boolean;
@@ -119,8 +120,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
 
     // Capture the frame directly from live camera feed
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-    setCapturedImage(dataUrl);
+    const compactPhotoUrl = compressCanvasToThumbnail(canvas, 360, 0.65) || canvas.toDataURL('image/jpeg', 0.5);
+    setCapturedImage(compactPhotoUrl);
 
     // 3. Anti-Cheat Verification (Camera live, GPS active, Timestamp, anti-screenshot)
     const antiCheatResult = await aiModelService.verifyAntiCheat(streamRef.current, canvas);
@@ -143,7 +144,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
       if (pred.confidence >= 0.85) {
         recordDiscovery(
           pred.species.id,
-          dataUrl,
+          compactPhotoUrl,
           pred.confidence,
           antiCheatResult.coordinates
         );
