@@ -1,15 +1,21 @@
 import * as tf from '@tensorflow/tfjs';
 import { INITIAL_SPECIES } from '../data/speciesData';
 import { Species } from '../types';
+import { locationService } from './locationService';
+
+export type ModelStatusState = 'MODEL_LOADING' | 'MODEL_READY' | 'MODEL_ERROR';
 
 export interface ModelPrediction {
-  species: Species;
+  supported: boolean;
+  species: Species | null;
   label: string;
-  confidence: number; // 0 to 1
+  rawClassIndex: number;
+  confidence: number; // 0.0 to 1.0
   confidencePercent: number; // 0 to 100
-  allPredictions: { label: string; confidence: number }[];
+  allPredictions: { label: string; confidence: number; classIndex: number }[];
   inputSize: { width: number; height: number };
   inferenceTimeMs: number;
+  unsupportedMessage?: string;
 }
 
 export interface AntiCheatRecord {
@@ -24,59 +30,57 @@ export interface AntiCheatRecord {
   rejectionReason?: string;
 }
 
+/**
+ * Explicit Canonical Mapping between 23 Teachable Machine Model Classes and EcoDex Species IDs.
+ * Only verified species are mapped to EcoDex IDs.
+ * Unsupported model classes (e.g. Turtle, Butterfly, Frog, Owl, Parrot, Fox, Monkey, Crocodile, Cobra, Wolf, Lion) are omitted.
+ */
+export const MODEL_TO_ECODEX_MAPPING: Record<number, string> = {
+  0: 'spec_0',   // 0 Crow -> spec_0 House Crow
+  1: 'spec_1',   // 1 Pigeon -> spec_1 Rock Pigeon
+  2: 'spec_2',   // 2 Squirrel -> spec_2 Indian Palm Squirrel
+  3: 'spec_3',   // 3 Dog -> spec_3 Stray Dog
+  4: 'spec_4',   // 4 Cat -> spec_4 Stray Cat
+  8: 'spec_7',   // 8 Peacock -> spec_7 Indian Peafowl
+  11: 'spec_13', // 11 Deer -> spec_13 Spotted Deer (Chital)
+  12: 'spec_9',  // 12 Rabbit -> spec_9 Indian Hare
+  18: 'spec_15', // 18 Tiger -> spec_15 Bengal Tiger
+  19: 'spec_16', // 19 Leopard -> spec_16 Indian Leopard
+  20: 'spec_14', // 20 Elephant -> spec_14 Indian Elephant
+  22: 'spec_17', // 22 Red Panda -> spec_17 Red Panda
+};
+
 export class AIModelService {
   private labels: string[] = [];
   private model: tf.LayersModel | null = null;
-  private isModelLoading: boolean = false;
-  private modelLoaded: boolean = false;
-  private readonly inputSize = 224;
+  private modelStatus: ModelStatusState = 'MODEL_LOADING';
+  private loadingPromise: Promise<boolean> | null = null;
+  private readonly inputSize = 224; // 224x224 input tensor size
 
   constructor() {
     this.initModel();
   }
 
   /**
-   * Loads class labels from converted_keras/labels.txt
-   * and trained Keras model from converted_keras/model.json
+   * Initializes and loads the converted TensorFlow.js Layers Model ONCE.
+   * Model instance is cached for subsequent inferences.
    */
   public async initModel(): Promise<boolean> {
-    if (this.model && this.labels.length > 0) {
-      this.modelLoaded = true;
+    if (this.model && this.modelStatus === 'MODEL_READY') {
       return true;
     }
 
-    if (this.isModelLoading) {
-      return false;
+    if (this.loadingPromise) {
+      return this.loadingPromise;
     }
 
-    this.isModelLoading = true;
+    this.loadingPromise = (async () => {
+      try {
+        this.modelStatus = 'MODEL_LOADING';
+        await tf.ready();
 
-    try {
-      // 1. Load labels from metadata.json or labels.txt
-      const metadataSources = [
-        '/converted_keras/metadata.json',
-        '/my_model/metadata.json',
-        '/model/metadata.json'
-      ];
-      for (const metaSrc of metadataSources) {
-        try {
-          const res = await fetch(metaSrc);
-          if (res.ok) {
-            const meta = await res.json();
-            if (Array.isArray(meta.labels) && meta.labels.length > 0) {
-              this.labels = meta.labels;
-              console.info(`EcoDex AI: Loaded ${this.labels.length} class labels from ${metaSrc}:`, this.labels);
-              break;
-            }
-          }
-        } catch (e) {
-          console.warn(`Could not load metadata from ${metaSrc}:`, e);
-        }
-      }
-
-      // Fallback to labels.txt if metadata.json not found
-      if (!this.labels.length) {
-        const labelSources = ['/converted_keras/labels.txt', '/my_model/labels.txt', '/model/labels.txt'];
+        // 1. Load labels.txt
+        const labelSources = ['/model/tfjs/labels.txt', '/model/labels.txt', '/converted_keras/labels.txt'];
         for (const src of labelSources) {
           try {
             const res = await fetch(src);
@@ -90,49 +94,67 @@ export class AIModelService {
                   const parts = line.split(' ');
                   return parts.length > 1 ? parts.slice(1).join(' ') : line;
                 });
-              if (this.labels.length > 0) {
-                console.info(`EcoDex AI: Loaded ${this.labels.length} class labels from ${src}`);
-                break;
-              }
+              if (this.labels.length > 0) break;
             }
-          } catch (e) {
-            console.warn(`Could not load labels from ${src}:`, e);
+          } catch {
+            // try next
           }
         }
-      }
 
-      if (!this.labels.length) {
-        this.labels = ['Cat', 'Dog', 'Elephant', 'Tiger', 'Lion'];
-      }
-
-      // 2. Load trained Teachable Machine Keras / TFJS model
-      const modelSources = [
-        '/converted_keras/model.json',
-        '/my_model/model.json',
-        '/model/model.json'
-      ];
-      for (const src of modelSources) {
-        try {
-          this.model = await tf.loadLayersModel(src);
-          this.modelLoaded = true;
-          console.info(`EcoDex AI: Successfully loaded Teachable Machine model from ${src}`);
-          break;
-        } catch (e) {
-          console.warn(`Could not load model from ${src}:`, e);
+        if (!this.labels.length) {
+          // Fallback 23 class label names matching original keras model
+          this.labels = [
+            'Crow', 'Pigeon', 'Squirrel', 'Dog', 'Cat', 'Butterfly', 'Frog',
+            'Turtle', 'Peacock', 'Owl', 'Parrot', 'Deer', 'Rabbit', 'Fox',
+            'Monkey', 'Crocodile', 'Cobra', 'Wolf', 'Tiger', 'Leopard',
+            'Elephant', 'Lion', 'Red Panda'
+          ];
         }
-      }
 
-      return Boolean(this.model);
-    } catch (err) {
-      console.error('EcoDex AI: Model initialization failed:', err);
-      return false;
-    } finally {
-      this.isModelLoading = false;
-    }
+        // 2. Load TF.js model JSON & weight shards
+        const modelSources = [
+          '/model/tfjs/model.json',
+          '/model/model.json',
+          '/converted_keras/model.json'
+        ];
+
+        for (const src of modelSources) {
+          try {
+            this.model = await tf.loadLayersModel(src);
+            if (this.model) {
+              this.modelStatus = 'MODEL_READY';
+              console.log(`EcoDex AI: Successfully loaded TensorFlow.js model from ${src}`);
+              break;
+            }
+          } catch (err) {
+            console.warn(`Could not load model from ${src}:`, err);
+          }
+        }
+
+        if (!this.model) {
+          this.modelStatus = 'MODEL_ERROR';
+          return false;
+        }
+
+        return true;
+      } catch (error) {
+        console.error('Failed to load TensorFlow.js model:', error);
+        this.modelStatus = 'MODEL_ERROR';
+        return false;
+      } finally {
+        this.loadingPromise = null;
+      }
+    })();
+
+    return this.loadingPromise;
+  }
+
+  public getStatus(): ModelStatusState {
+    return this.modelStatus;
   }
 
   public isLoaded(): boolean {
-    return this.modelLoaded && Boolean(this.model);
+    return this.modelStatus === 'MODEL_READY' && this.model !== null;
   }
 
   public getLabels(): string[] {
@@ -140,187 +162,101 @@ export class AIModelService {
   }
 
   /**
-   * Preprocesses captured image (224x224, normalized to [-1, 1]),
-   * runs inference through the trained Keras model,
-   * and extracts the class prediction with highest confidence.
+   * Executes REAL TensorFlow.js inference on captured canvas/video element.
+   * Tensors are managed & cleaned up using tf.tidy().
    */
   public async predict(
-    imageElement: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement,
-    forcedTargetSpeciesName?: string
+    videoOrCanvas: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement
   ): Promise<ModelPrediction> {
     const startTime = performance.now();
 
-    // Ensure model and labels are loaded
-    if (!this.model) {
-      await this.initModel();
-    }
-
-    if (!this.model) {
-      throw new Error('Teachable Machine Keras model could not be loaded from converted_keras.');
-    }
-
-    // If developer/testing tool manually forced target species
-    if (forcedTargetSpeciesName) {
-      const manualMatch = INITIAL_SPECIES.find(
-        s => s.name.toLowerCase().includes(forcedTargetSpeciesName.toLowerCase()) ||
-             forcedTargetSpeciesName.toLowerCase().includes(s.name.toLowerCase())
-      ) || INITIAL_SPECIES[4];
-
-      const confidence = 0.94;
-      return {
-        species: manualMatch,
-        label: manualMatch.name,
-        confidence,
-        confidencePercent: 94,
-        allPredictions: [{ label: manualMatch.name, confidence }],
-        inputSize: { width: this.inputSize, height: this.inputSize },
-        inferenceTimeMs: Math.round(performance.now() - startTime)
-      };
-    }
-
-    // 1. Center crop and resize input to 224x224 canvas
-    const canvas = document.createElement('canvas');
-    canvas.width = this.inputSize;
-    canvas.height = this.inputSize;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) {
-      throw new Error('Canvas 2D context not available for model preprocessing');
-    }
-
-    const srcW = 'videoWidth' in imageElement ? (imageElement.videoWidth || 640) : (imageElement.width || 640);
-    const srcH = 'videoHeight' in imageElement ? (imageElement.videoHeight || 480) : (imageElement.height || 480);
-    const minDim = Math.min(srcW, srcH);
-    const sx = (srcW - minDim) / 2;
-    const sy = (srcH - minDim) / 2;
-
-    ctx.drawImage(imageElement, sx, sy, minDim, minDim, 0, 0, this.inputSize, this.inputSize);
-
-    // 2. Preprocessing: convert to float32 tensor, expand dims, normalize: (pixel / 127.5) - 1.0
-    const rawTensor = tf.browser.fromPixels(canvas);
-    const floatTensor = rawTensor.toFloat();
-    const normalized = floatTensor.div(127.5).sub(1.0);
-    const batched = normalized.expandDims(0); // Shape: [1, 224, 224, 3]
-
-    // 3. Run Inference through Keras Model
-    const outputTensor = this.model.predict(batched) as tf.Tensor;
-    const probabilities = await outputTensor.data(); // Float32Array of class probabilities
-
-    // Clean up GPU tensors
-    rawTensor.dispose();
-    floatTensor.dispose();
-    normalized.dispose();
-    batched.dispose();
-    outputTensor.dispose();
-
-    // 4. Find the class with the highest confidence
-    let topIndex = 0;
-    let highestConfidence = -1;
-    const allPredictions: { label: string; confidence: number }[] = [];
-
-    for (let i = 0; i < this.labels.length; i++) {
-      const prob = probabilities[i] !== undefined ? probabilities[i] : 0;
-      allPredictions.push({
-        label: this.labels[i],
-        confidence: parseFloat(prob.toFixed(4))
-      });
-      if (prob > highestConfidence) {
-        highestConfidence = prob;
-        topIndex = i;
+    if (!this.model || this.modelStatus !== 'MODEL_READY') {
+      const loaded = await this.initModel();
+      if (!loaded || !this.model) {
+        throw new Error('TensorFlow.js model is not loaded.');
       }
     }
 
-    const predictedLabel = this.labels[topIndex] || 'Wildlife Specimen';
-    const confidence = parseFloat(highestConfidence.toFixed(4));
-    const confidencePercent = Math.round(confidence * 100);
+    // Wrap tensor creation, normalization, and inference inside tf.tidy to automatically dispose all intermediate tensors
+    const { probabilities, topIndex, maxProb } = tf.tidy(() => {
+      // 1. Create tensor from pixel source (Shape: [height, width, 3])
+      const rawTensor = tf.browser.fromPixels(videoOrCanvas);
 
-    // 5. Match predicted label to EcoDex Species (by name/key, never by index)
-    const labelLower = predictedLabel.toLowerCase().trim();
-    const labelMap: Record<string, string> = {
-      // 5 trained animals from converted_keras
-      'cat': 'spec_4',           // Stray Cat (Felis catus)
-      'dog': 'spec_3',           // Stray Dog (Canis lupus familiaris)
-      'elephant': 'spec_14',     // Indian Elephant (Elephas maximus indicus)
-      'tiger': 'spec_15',        // Bengal Tiger (Panthera tigris tigris)
-      'lion': 'spec_20',         // Asiatic Lion (Panthera leo persica)
+      // 2. Resize to 224x224 bilinear
+      const resized = tf.image.resizeBilinear(rawTensor, [this.inputSize, this.inputSize]);
 
-      // Other wildlife in EcoDex
-      'crow': 'spec_0',          // House Crow
-      'pigeon': 'spec_1',        // Rock Pigeon
-      'squirrel': 'spec_2',      // Indian Palm Squirrel
-      'myna': 'spec_5',          // Common Myna
-      'sparrow': 'spec_6',       // House Sparrow
-      'turtle': 'spec_7',        // Turtle
-      'lizard': 'spec_8',        // Monitor Lizard
-      'peafowl': 'spec_9',       // Indian Peafowl
-      'peacock': 'spec_9',       // Indian Peafowl
-      'kingfisher': 'spec_10',   // White-throated Kingfisher
-      'roller': 'spec_11',       // Indian Roller
-      'deer': 'spec_12',         // Spotted Deer
-      'hare': 'spec_13',         // Indian Hare
-      'rabbit': 'spec_13',       // Indian Hare
-      'leopard': 'spec_16',      // Indian Leopard
-      'snow leopard': 'spec_17', // Snow Leopard
-      'red panda': 'spec_18',    // Red Panda
-      'bustard': 'spec_19'       // Great Indian Bustard
-    };
+      // 3. Normalize pixel values to [-1, 1] as expected by Teachable Machine MobileNet:
+      // normalized = (pixel / 127.5) - 1.0
+      const normalized = resized.div(tf.scalar(127.5)).sub(tf.scalar(1.0));
 
-    let matchedSpecies: Species | undefined;
+      // 4. Expand dimensions for batch input: [1, 224, 224, 3]
+      const batched = normalized.expandDims(0);
 
-    // Direct mapped key
-    if (labelMap[labelLower]) {
-      matchedSpecies = INITIAL_SPECIES.find(s => s.id === labelMap[labelLower]);
-    }
+      // 5. Run model prediction
+      const outputTensor = this.model!.predict(batched) as tf.Tensor;
 
-    // Name substring matching
-    if (!matchedSpecies) {
-      matchedSpecies = INITIAL_SPECIES.find(
-        s => s.name.toLowerCase().trim() === labelLower ||
-             s.name.toLowerCase().includes(labelLower) ||
-             labelLower.includes(s.name.toLowerCase())
-      );
-    }
+      // Extract prediction values synchronously before tidy disposes tensors
+      const probsData = Array.from(outputTensor.dataSync());
+      const argmaxVal = tf.argMax(outputTensor, 1).dataSync()[0];
+      const maxVal = tf.max(outputTensor, 1).dataSync()[0];
 
-    if (!matchedSpecies) {
-      matchedSpecies = {
-        id: `spec_keras_${topIndex}`,
-        labelIndex: topIndex,
-        name: predictedLabel,
-        scientificName: `${predictedLabel} sp.`,
-        category: 'Mammal',
-        rarity: 'Common',
-        xp: 30,
-        habitat: 'Natural Habitats & Urban Parks',
-        diet: 'Natural Diet',
-        conservationStatus: 'Least Concern',
-        description: `Biological specimen identified directly by trained Keras model (${predictedLabel}).`,
-        funFact: `Verified classification output from Teachable Machine Keras model.`,
-        wildlifeFacts: [`Identified with ${confidencePercent}% match confidence.`],
-        icon: '🐾',
-        image: 'https://images.unsplash.com/photo-1548681528-6a5c45b66b42?auto=format&fit=crop&w=800&q=80',
-        discovered: false,
-        firstDiscoveredDate: 'Undiscovered',
-        discoveryLocation: 'Bio-Reserve Field',
-        totalSightings: 0
+      return {
+        probabilities: probsData,
+        topIndex: argmaxVal,
+        maxProb: maxVal
       };
-    }
+    });
 
     const inferenceTimeMs = Math.round(performance.now() - startTime);
 
-    return {
-      species: matchedSpecies,
-      label: predictedLabel,
-      confidence,
-      confidencePercent,
-      allPredictions,
-      inputSize: { width: this.inputSize, height: this.inputSize },
-      inferenceTimeMs
-    };
+    const rawLabel = this.labels[topIndex] || `Class_${topIndex}`;
+    const confidence = parseFloat(maxProb.toFixed(4));
+    const confidencePercent = Math.round(confidence * 100);
+
+    const allPredictions = probabilities.map((prob, idx) => ({
+      label: this.labels[idx] || `Class_${idx}`,
+      confidence: parseFloat(prob.toFixed(4)),
+      classIndex: idx
+    }));
+
+    // Check if the predicted class is supported in EcoDex 20-species canonical taxonomy
+    const speciesId = MODEL_TO_ECODEX_MAPPING[topIndex];
+    const isSupported = Boolean(speciesId);
+
+    if (isSupported && speciesId) {
+      const speciesMatch = INITIAL_SPECIES.find(s => s.id === speciesId) || null;
+
+      return {
+        supported: true,
+        species: speciesMatch,
+        label: rawLabel,
+        rawClassIndex: topIndex,
+        confidence,
+        confidencePercent,
+        allPredictions,
+        inputSize: { width: this.inputSize, height: this.inputSize },
+        inferenceTimeMs
+      };
+    } else {
+      // Unsupported model class (e.g. Turtle, Butterfly, Frog, Owl, Parrot, etc.)
+      return {
+        supported: false,
+        species: null,
+        label: rawLabel,
+        rawClassIndex: topIndex,
+        confidence,
+        confidencePercent,
+        allPredictions,
+        inputSize: { width: this.inputSize, height: this.inputSize },
+        inferenceTimeMs,
+        unsupportedMessage: 'Species detected, but it is not currently part of the EcoDex catalogue.'
+      };
+    }
   }
 
   /**
    * Anti-Cheat Engine:
-   * Validates that the capture comes from a live camera stream,
-   * with active GPS, valid timestamp, and no screenshot artifacts.
+   * Validates live camera hardware stream and active GPS geolocation via locationService.
    */
   public async verifyAntiCheat(
     stream: MediaStream | null,
@@ -329,7 +265,7 @@ export class AIModelService {
     const timestampMs = Date.now();
     const timestamp = new Date().toISOString();
 
-    // 1. Verify Live Camera Stream
+    // 1. Verify Live Camera Hardware Stream
     if (!stream) {
       return {
         isValidLiveCapture: false,
@@ -355,34 +291,24 @@ export class AIModelService {
       };
     }
 
-    // 2. Verify GPS Location
-    let gpsCoords = { lat: 18.5204, lng: 73.8567, accuracy: 12 };
+    // 2. Verify Real GPS Location using locationService
+    let gpsCoords = { lat: 0, lng: 0, accuracy: 0 };
     let gpsActive = false;
 
-    try {
-      const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-        if (!navigator.geolocation) {
-          reject(new Error('Geolocation not supported'));
-          return;
-        }
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 4000
-        });
-      });
-
+    const locPoint = await locationService.getSinglePosition();
+    if (locPoint) {
       gpsCoords = {
-        lat: parseFloat(pos.coords.latitude.toFixed(5)),
-        lng: parseFloat(pos.coords.longitude.toFixed(5)),
-        accuracy: Math.round(pos.coords.accuracy)
+        lat: locPoint.lat,
+        lng: locPoint.lng,
+        accuracy: locPoint.accuracy
       };
       gpsActive = true;
-    } catch {
-      // In development or when GPS prompt is pending, fallback to nature reserve GPS with flag
-      gpsActive = true;
+    } else {
+      gpsActive = false;
+      gpsCoords = { lat: 0, lng: 0, accuracy: 0 };
     }
 
-    // 3. Screenshot / Injection Heuristic Check
+    // 3. Sensor Noise Check
     const ctx = canvas.getContext('2d');
     let hasSensorNoise = true;
     if (ctx && canvas.width > 10 && canvas.height > 10) {
