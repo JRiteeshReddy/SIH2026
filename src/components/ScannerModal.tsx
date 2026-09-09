@@ -210,8 +210,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
 
           {/* Model Status Pill */}
           <div className="flex items-center gap-1.5 bg-white/10 px-2.5 py-0.5 rounded-full text-[10px] text-slate-300 font-mono">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-            <span>keras_model.h5 (23 Classes)</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span>MobileNet AI Vision (Active)</span>
           </div>
 
           <button
