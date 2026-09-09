@@ -1,0 +1,23 @@
+0 Crow
+1 Pigeon
+2 Squirrel
+3 Dog
+4 Cat
+5 Butterfly
+6 Frog
+7 Turtle
+8 Peacock
+9 Owl
+10 Parrot
+11 Deer
+12 Rabbit
+13 Fox
+14 Monkey
+15 Crocodile
+16 Cobra
+17 Wolf
+18 Tiger
+19 Leopard
+20 Elephant
+21 Lion
+22 Red Panda

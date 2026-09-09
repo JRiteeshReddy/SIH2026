@@ -385,7 +385,7 @@ export const fetchLeaderboardFromFirestore = async (): Promise<LeaderboardUser[]
 // ==================================================
 
 export const logExpeditionToFirestore = async (expedition: Expedition): Promise<void> => {
-  const currentUid = auth.currentUser?.uid || expedition.userId;
+  const currentUid = auth?.currentUser?.uid || expedition.userId;
   const payload: Expedition = {
     ...expedition,
     userId: currentUid,
@@ -397,7 +397,7 @@ export const logExpeditionToFirestore = async (expedition: Expedition): Promise<
   history.unshift(payload);
   localStorage.setItem('ecodex_expedition_history', JSON.stringify(history.slice(0, 50)));
 
-  if (navigator.onLine && db && auth.currentUser) {
+  if (navigator.onLine && db && auth?.currentUser) {
     try {
       await setDoc(doc(db, 'expeditions', expedition.id), payload);
       return;
@@ -426,7 +426,7 @@ export const getLocalExpeditions = (): Expedition[] => {
 // ==================================================
 
 export const logDiscoveryToFirestore = async (discovery: DiscoveryRecord): Promise<void> => {
-  const currentUid = auth.currentUser?.uid || discovery.userId;
+  const currentUid = auth?.currentUser?.uid || discovery.userId;
   const latVal = typeof discovery.latitude === 'number' ? discovery.latitude : (discovery.coordinates?.lat ?? 18.5204);
   const lngVal = typeof discovery.longitude === 'number' ? discovery.longitude : (discovery.coordinates?.lng ?? 73.8567);
   const confVal = typeof discovery.confidence === 'number' ? Math.min(1, Math.max(0, discovery.confidence)) : 0.95;
@@ -446,6 +446,7 @@ export const logDiscoveryToFirestore = async (discovery: DiscoveryRecord): Promi
     expeditionId: discovery.expeditionId || null,
     createdAt: discovery.createdAt || new Date().toISOString(),
     localImageUri: discovery.localImageUri || discovery.photoUrl,
+    photoUrl: discovery.photoUrl || discovery.localImageUri,
     locationName: discovery.locationName || 'Nature Sanctuary'
   };
 
@@ -455,7 +456,7 @@ export const logDiscoveryToFirestore = async (discovery: DiscoveryRecord): Promi
   localStorage.setItem('ecodex_discovery_history', JSON.stringify(history.slice(0, 50)));
 
   // Do NOT upload base64 or images to Firebase Storage (staying on Spark plan)
-  if (navigator.onLine && db && auth.currentUser) {
+  if (navigator.onLine && db && auth?.currentUser) {
     try {
       await setDoc(doc(db, 'discoveries', discovery.id), payload);
       return;
